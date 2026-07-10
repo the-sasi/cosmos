@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000006">
+<title>COSMOS — from the universe to Everest</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000006; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #cfd6e4; }
+  #scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+  #scene.dragging { cursor: grabbing; }
+
+  /* subtle vignette for depth */
+  #vignette { position: fixed; inset: 0; pointer-events: none; z-index: 2;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,8,0.45) 100%); }
+
+  .hud { position: fixed; z-index: 5; pointer-events: none; user-select: none;
+    -webkit-user-select: none; text-shadow: 0 1px 6px rgba(0,0,10,0.9); }
+
+  /* focus name — top left */
+  #hud-name { top: max(14px, env(safe-area-inset-top)); left: 18px; }
+  #hud-name .n { font-size: 21px; font-weight: 600; letter-spacing: 0.06em; color: #eef2fa; }
+  #hud-name .d { font-size: 12.5px; margin-top: 3px; color: #93a0b8; letter-spacing: 0.04em; }
+  #hud-name .warn { font-size: 11px; margin-top: 3px; color: #d9a24a; letter-spacing: 0.05em; }
+
+  /* scale bar — bottom center */
+  #hud-scale { bottom: max(18px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+    text-align: center; width: min(340px, 78vw); }
+  #hud-scale .bar { height: 1px; background: linear-gradient(90deg, transparent, #8fa2c4 15%, #8fa2c4 85%, transparent);
+    position: relative; margin-top: 7px; }
+  #hud-scale .bar::before, #hud-scale .bar::after { content: ""; position: absolute; top: -4px; width: 1px; height: 9px; background: #8fa2c4; }
+  #hud-scale .bar::before { left: 15%; } #hud-scale .bar::after { right: 15%; }
+  #hud-scale .w { font-size: 14.5px; font-weight: 600; color: #dfe7f4; letter-spacing: 0.03em; font-variant-numeric: tabular-nums; }
+  #hud-scale .ref { font-size: 11.5px; color: #8b97ad; margin-top: 5px; letter-spacing: 0.04em; }
+
+  /* caption toast — top center */
+  #hud-caption { top: max(16px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+    max-width: min(560px, 86vw); text-align: center; font-size: 13.5px; line-height: 1.5;
+    color: #c8d2e6; background: rgba(8,10,20,0.55); border: 1px solid rgba(140,160,200,0.18);
+    border-radius: 10px; padding: 9px 16px; backdrop-filter: blur(6px);
+    opacity: 0; transition: opacity 0.8s ease; }
+  #hud-caption.show { opacity: 1; }
+
+  /* controls — bottom right */
+  #hud-ctl { bottom: max(16px, env(safe-area-inset-bottom)); right: 16px; display: flex;
+    flex-direction: column; align-items: flex-end; gap: 8px; pointer-events: none; }
+  #hud-ctl .btns { display: flex; gap: 8px; pointer-events: auto; }
+  #hud-ctl button { font: 600 12px system-ui, sans-serif; letter-spacing: 0.04em; color: #b9c4d9;
+    background: rgba(14,17,30,0.6); border: 1px solid rgba(140,160,200,0.22); border-radius: 999px;
+    padding: 8px 14px; cursor: pointer; backdrop-filter: blur(6px); transition: all 0.2s; }
+  #hud-ctl button:hover { color: #fff; border-color: rgba(160,180,220,0.5); }
+  #hud-ctl button.on { color: #0b0e18; background: #c8d4ec; border-color: #c8d4ec; }
+  #hud-hints { font-size: 11px; color: #6d7890; letter-spacing: 0.05em; text-align: right; line-height: 1.7; }
+  @media (pointer: coarse) { #hud-hints .kb { display: none; } }
+  @media (pointer: fine)   { #hud-hints .tc { display: none; } }
+
+  #hud-credit { bottom: max(16px, env(safe-area-inset-bottom)); left: 18px; font-size: 10px;
+    color: #4d5568; letter-spacing: 0.04em; }
+
+  /* intro title */
+  #intro { position: fixed; inset: 0; z-index: 8; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; pointer-events: none;
+    transition: opacity 1.6s ease; }
+  #intro h1 { font-size: clamp(30px, 6vw, 54px); font-weight: 200; letter-spacing: 0.55em;
+    color: #e8edf7; text-indent: 0.55em; text-shadow: 0 0 40px rgba(120,150,220,0.35); }
+  #intro p { margin-top: 18px; font-size: 13px; letter-spacing: 0.3em; color: #7d89a3; text-transform: uppercase; }
+  #intro.gone { opacity: 0; }
+
+  /* loading */
+  #loading { position: fixed; inset: 0; z-index: 20; background: #000006; display: flex;
+    flex-direction: column; align-items: center; justify-content: center; gap: 22px;
+    transition: opacity 1s ease; }
+  #loading.gone { opacity: 0; pointer-events: none; }
+  #loading .orb { width: 46px; height: 46px; border-radius: 50%;
+    border: 1px solid rgba(150,170,210,0.35); border-top-color: #dfe7f6;
+    animation: spin 1.1s linear infinite; }
+  #loading .t { font-size: 12px; letter-spacing: 0.35em; color: #7d89a3; text-transform: uppercase; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* screen flash (wormhole) */
+  #flash { position: fixed; inset: 0; z-index: 15; background: #fff; opacity: 0;
+    pointer-events: none; transition: opacity 0.25s ease; }
+
+  /* info panel (monument / place dives) */
+  #hud-info { position: fixed; z-index: 6; right: 16px; top: 50%; transform: translateY(-50%) translateX(16px);
+    width: min(300px, 78vw); background: rgba(10,13,24,0.78); border: 1px solid rgba(140,160,200,0.22);
+    border-radius: 14px; padding: 16px 18px; backdrop-filter: blur(10px);
+    opacity: 0; pointer-events: none; transition: opacity 0.35s ease, transform 0.35s ease; }
+  #hud-info.show { opacity: 1; pointer-events: auto; transform: translateY(-50%) translateX(0); }
+  #hud-info .x { position: absolute; top: 8px; right: 12px; background: none; border: none;
+    color: #8b97ad; font-size: 18px; cursor: pointer; }
+  #hud-info h3 { font-size: 16px; font-weight: 600; color: #eef2fa; letter-spacing: 0.03em; margin-bottom: 2px; }
+  #hud-info .sub { font-size: 11.5px; color: #93a0b8; margin-bottom: 12px; }
+  #hud-info .row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+  #hud-info .row .nm { flex: 0 0 88px; font-size: 11px; color: #aab4c8; text-align: right; }
+  #hud-info .row .bar { height: 7px; border-radius: 4px; background: linear-gradient(90deg, #5b83c4, #9db8e8);
+    min-width: 2px; }
+  #hud-info .row.hero .bar { background: linear-gradient(90deg, #d9a24a, #f4cf8a); }
+  #hud-info .row.deep .bar { background: linear-gradient(90deg, #2a679f, #67a8d8); }
+  #hud-info .row .v { font-size: 10.5px; color: #7d89a3; white-space: nowrap; }
+  #hud-info .note { font-size: 11.5px; line-height: 1.55; color: #b9c4d9; margin-top: 12px; }
+
+  #nogl { position: fixed; inset: 0; z-index: 30; background: #000; display: none;
+    align-items: center; justify-content: center; text-align: center; padding: 30px;
+    font-size: 15px; line-height: 1.7; color: #aab4c8; }
+
+  #err { position: fixed; top: 8px; right: 8px; z-index: 40; max-width: 46vw; display: none;
+    font: 11px/1.5 ui-monospace, monospace; color: #ff9d9d; background: rgba(40,0,0,0.75);
+    border: 1px solid rgba(255,100,100,0.3); border-radius: 6px; padding: 6px 10px; }
+</style>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <div id="vignette"></div>
+
+  <div id="hud-name" class="hud"><div class="n"></div><div class="d"></div><div class="warn"></div></div>
+  <div id="hud-caption" class="hud"></div>
+  <div id="hud-scale" class="hud"><div class="w"></div><div class="bar"></div><div class="ref"></div></div>
+
+  <div id="hud-ctl" class="hud">
+    <div class="btns">
+      <button id="btn-exag" title="Exaggerate terrain (E)">⛰ terrain ×1</button>
+      <button id="btn-labels" class="on" title="Toggle labels (L)">labels</button>
+    </div>
+    <div id="hud-hints">
+      <span class="kb">scroll — zoom &nbsp;·&nbsp; drag — orbit &nbsp;·&nbsp; click — travel &nbsp;·&nbsp; E — terrain</span>
+      <span class="tc">pinch — zoom &nbsp;·&nbsp; drag — orbit &nbsp;·&nbsp; tap — travel</span>
+    </div>
+  </div>
+
+  <div id="hud-credit" class="hud">imagery: NASA · planets: Solar System Scope (CC BY 4.0) · hypothetical objects marked</div>
+  <div id="hud-info" class="hud"></div>
+
+  <div id="intro"><h1>COSMOS</h1><p>scroll to fall in</p></div>
+  <div id="flash"></div>
+  <div id="loading"><div class="orb"></div><div class="t">building the universe</div></div>
+  <div id="nogl">This experience needs WebGL, which your browser or device has disabled.<br>Try a current version of Chrome, Edge, Firefox or Safari.</div>
+  <div id="err"></div>
+
+  <script src="js/three.min.js"></script>
+  <script src="js/assets.js"></script>
+  <script src="js/assets_planets.js"></script>
+  <script src="js/geo_data.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/mod_universe.js"></script>
+  <script src="js/mod_solar.js"></script>
+  <script src="js/mod_earth.js"></script>
+  <script src="js/mod_geo.js"></script>
+  <script src="js/mod_exotic.js"></script>
+  <script src="js/mod_monuments.js"></script>
+  <script>COSMOS.boot();</script>
+</body>
+</html>
