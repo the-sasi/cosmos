@@ -598,6 +598,7 @@
     /* ============================== ANIMATE =============================== */
 
     var tmpA = new THREE.Vector3();
+    var upV = new THREE.Vector3();
     var SUN_SPIN = TWO_PI / (DAY_SECONDS * 25.4);
 
     ctx.onUpdate(function (dt, st) {
@@ -643,6 +644,8 @@
       // labels: screen-constant height. A body's label shows once its orbit is
       // visually separated from its parent (>= 44 px), so names reveal
       // progressively on the way in — Sun first, outer planets, then inner.
+      // Offset along SCREEN-up so labels clear the disc from any viewing angle.
+      upV.set(0, 1, 0).applyQuaternion(ctx.camera.quaternion);
       for (var j = 0; j < labels.length; j++) {
         var lb = labels[j];
         var pos = ctx.eph[lb.key];
@@ -657,7 +660,7 @@
         if (show) {
           lb.sprite.visible = true;
           var hw = LABEL_PX / ppu;                    // label height in world units
-          lb.sprite.position.set(pos.x, pos.y + lb.radius + hw * 1.2, pos.z);
+          lb.sprite.position.copy(pos).addScaledVector(upV, lb.radius + hw * 1.2);
           lb.sprite.scale.set(hw * lb.aspect, hw, 1);
         } else {
           lb.sprite.visible = false;

@@ -164,6 +164,30 @@
     var homeLabel = ctx.makeTextSprite('⌂ ' + HOME.name, { fontPx: 46, color: '#ffd27a' });
     homeLabel.visible = false;
     homeAnchor.add(homeLabel);
+    // screen-facing glow so home reads from EVERY angle (a pillar seen from
+    // directly above is edge-on and invisible)
+    var homeGlow = (function () {
+      var c = document.createElement('canvas');
+      c.width = 64; c.height = 64;
+      var g = c.getContext('2d');
+      var grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+      grad.addColorStop(0, 'rgba(255,255,255,1)');
+      grad.addColorStop(0.25, 'rgba(255,210,122,0.9)');
+      grad.addColorStop(0.6, 'rgba(255,180,80,0.25)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 64, 64);
+      var tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      var s = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: tex, transparent: true, blending: THREE.AdditiveBlending,
+        depthTest: true, depthWrite: false
+      }));
+      s.position.y = 1.0006;
+      s.renderOrder = 10;
+      homeAnchor.add(s);
+      return s;
+    })();
     var homeSx = -1, homeSy = -1, homeOn = false;
 
     // Glue to the spinning Earth. mod_earth builds first, but stay defensive.
@@ -247,10 +271,12 @@
     ctx.onUpdate(function (dt, state) {
       if (!surfRef && !tryAttach()) return;
 
-      // One-time whisper the first time the viewer gets truly close.
-      if (!toastShown && state.altitude < 0.05) {
+      // One-time whisper the first time the viewer gets truly close — to EARTH.
+      if (!toastShown && state.focusName === 'earth' && state.altitude < 0.05) {
         toastShown = true;
-        ctx.toast('Every marker here — every mountain, tower and trench that humans call vast — press E, then zoom out and watch them vanish.', 9000);
+        ctx.toast('Every marker here — every mountain, tower and trench that humans call vast — ' +
+          (ctx.quality.isMobile ? 'tap the ⛰ terrain button' : 'press E') +
+          ', then zoom out and watch them vanish.', 9000);
       }
 
       // Global gate: skip all work unless the camera is near Earth.
@@ -279,16 +305,18 @@
       homeOn = homeFace > 0.05 && tmpD.z <= 1;
       homeSx = (tmpD.x * 0.5 + 0.5) * scrW;
       homeSy = (-tmpD.y * 0.5 + 0.5) * scrH;
-      var hv = state.labelsVisible && homeFace > 0.08;
+      var hD = Math.max(tmpA.length(), 1e-9);
+      var hv = state.labelsVisible && homeFace > 0.08 && hD < 6;
       if (hv) {
-        var hD = tmpA.length();
-        if (hD < 6 && hD > 1e-9) {
-          var hwh = 15 / state.pixelsPerUnit(hD);
-          homeLabel.position.y = 1 + PILLAR_H + hwh * 1.4;
-          homeLabel.scale.set(hwh * homeLabel.userData.aspect, hwh, 1);
-        } else hv = false;
+        var hwh = 15 / state.pixelsPerUnit(hD);
+        homeLabel.position.y = 1 + PILLAR_H + hwh * 1.4;
+        homeLabel.scale.set(hwh * homeLabel.userData.aspect, hwh, 1);
       }
       if (homeLabel.visible !== hv) homeLabel.visible = hv;
+      var gs = 14 / state.pixelsPerUnit(hD);           // 14 px glow, any distance
+      homeGlow.scale.set(gs, gs, 1);
+      homeGlow.material.opacity = 0.55 + 0.3 * Math.sin(state.t * 2.4);
+      homeGlow.visible = homeFace > 0.02;
 
       for (var j = 0; j < items.length; j++) {
         var it = items[j];

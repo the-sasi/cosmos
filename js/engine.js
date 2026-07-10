@@ -61,6 +61,10 @@
   var COSMOS = {
     LAYOUT: LAYOUT,
     register: function (name, build) { registry.push({ name: name, build: build }); },
+    // multiverse: a universe is pure data — {id, name, tagline, accent, camMax,
+    // facts, build(ctx, group, registerFocus)}. No engine changes to add one.
+    _universeDefs: [],
+    registerUniverse: function (def) { this._universeDefs.push(def); },
     eph: {},         // name -> THREE.Vector3 (logical positions, stable instances)
     shared: {},      // cross-module handles (earth module publishes earthSurface here)
     util: {}
@@ -171,9 +175,18 @@
 
     // ---- focusables ---------------------------------------------------------
     var focusables = {};
+    var realms = {};                 // id -> {group, def}
+    var realmHome = { observable: 'sun' };
+    var realmNavLists = { observable: ['sun', 'mercury', 'venus', 'earth', 'moon',
+      'mars', 'jupiter', 'saturn', 'uranus', 'neptune', 'blackhole', 'wormhole'] };
     function addFocus(f) {
       f.minAlt = f.minAlt !== undefined ? f.minAlt : Math.max(f.radius * 0.02, 8e-4);
+      f.realm = f.realm || 'observable';
       focusables[f.name] = f;
+    }
+    function camMax() {
+      var r = realms[state.realm];
+      return (r && r.def.camMax) || LAYOUT.CAM_MAX;
     }
     addFocus({ name: 'sun', label: 'The Sun', radius: LAYOUT.SUN.radius, minAlt: 40, parent: null,
                getPosition: function () { return eph.sun; } });
@@ -217,6 +230,7 @@
     // ---- live state exposed to modules --------------------------------------
     var state = {
       t: 0, dt: 0, timeScale: 1,
+      realm: 'observable',
       exaggeration: 1, exagTarget: 1,
       labelsVisible: true,
       camPos: camPos,
@@ -240,6 +254,8 @@
       km: function (km) { return km / KM_PER_UNIT; },
       onUpdate: function (fn) { updaters.push(fn); },
       onClick: function (fn) { clickHooks.push(fn); },   // return true to consume
+      addFact: function (name, text) { FOCUS_FACTS[name] = text; },
+      addNav: function (name) { realmNavLists.observable.push(name); },
       registerFocus: addFocus,
       makeTextSprite: makeTextSprite,
       toast: showToast,
@@ -354,11 +370,13 @@
       return '≈ ' + ns + ' × ' + pick[1];
     }
 
-    // narrative captions per scale band (keyed on displayed km)
+    // narrative captions per scale band (keyed on displayed km);
+    // a third element restricts the caption to one focus body
+    var EHINT = quality.isMobile ? 'Tap the ⛰ terrain button' : 'Press E';
     var BANDS = [
-      [0,        'That marker is a person — 1.7 m tall. Remember this size. It will vanish almost immediately.'],
-      [30,       'Everest rises 8.8 km. The Mariana Trench drops 10.9 km. Together: 0.155% of Earth\'s diameter. Press E to see why you can\'t see them.'],
-      [3000,     'Earth — 12,742 km across. At this scale it is smoother than a billiard ball. Every mountain has vanished.'],
+      [0,        'That marker is a person — 1.7 m tall. Remember this size. It will vanish almost immediately.', 'earth'],
+      [30,       'Everest rises 8.8 km. The Mariana Trench drops 10.9 km. Together: 0.155% of Earth\'s diameter. ' + EHINT + ' to see why you can\'t see them.', 'earth'],
+      [3000,     'Earth — 12,742 km across. At this scale it is smoother than a billiard ball. Every mountain has vanished.', 'earth'],
       [8e4,      'The Moon orbits 30 Earth-diameters out. All seven other planets would fit in the gap, side by side.'],
       [2e6,      'The Sun — 109 Earths wide. 1.3 million Earths would fit inside it.'],
       [5e8,      'Interplanetary space is almost perfectly empty. Sunlight takes 4 hours to reach Neptune; it reached you in 8 minutes.'],
@@ -404,7 +422,7 @@
         var ids = Object.keys(pointers);
         pinchDist = Math.hypot(pointers[ids[0]].x - pointers[ids[1]].x,
                                pointers[ids[0]].y - pointers[ids[1]].y);
-      }
+      } else if (numPointers() > 2) pinchDist = 0;
     });
     canvas.addEventListener('pointermove', function (e) {
       mouse.x = e.clientX; mouse.y = e.clientY;
@@ -437,10 +455,17 @@
       }
     });
     function endPointer(e) {
-      var wasClick = downInfo && numPointers() === 1 &&
+      // a cancelled pointer (OS gesture, incoming call) is never a click
+      var wasClick = e.type === 'pointerup' && downInfo && numPointers() === 1 &&
                      performance.now() - downInfo.t < 350 && downInfo.moved < 8;
       delete pointers[e.pointerId];
-      if (numPointers() < 2) pinchDist = 0;
+      if (numPointers() === 2) {
+        // 3→2 finger transition: reseed for the surviving pair, or the next
+        // move computes a zoom from a stale distance and the view lurches
+        var ids = Object.keys(pointers);
+        pinchDist = Math.hypot(pointers[ids[0]].x - pointers[ids[1]].x,
+                               pointers[ids[0]].y - pointers[ids[1]].y);
+      } else pinchDist = 0;
       if (numPointers() === 0) canvas.classList.remove('dragging');
       if (wasClick) handleClick(e.clientX, e.clientY);
       if (numPointers() === 0) downInfo = null;
@@ -477,9 +502,15 @@
     }, { passive: false });
 
     function zoomBy(factor) {
-      if (flight) flight = null;                    // user takes the stick
+      if (flight) {
+        // user takes the stick mid-flight: commit the destination and re-anchor
+        // around it seamlessly — never snap back to the departed body
+        var tgt = flight.to;
+        flight = null;
+        setFocusSeamless(tgt);
+      }
       cam.radiusT = clamp(cam.radiusT * factor,
-                          cam.focus.radius + cam.focus.minAlt, LAYOUT.CAM_MAX);
+                          cam.focus.radius + cam.focus.minAlt, camMax());
       if (factor < 1) tryRetarget();
     }
 
@@ -497,10 +528,12 @@
     }
     var scr = { x: 0, y: 0, front: false, dist: 0 };
 
-    // selection gate: you can only reach for bodies once you've entered their
-    // neighborhood — from outside the solar system, only the Sun answers.
+    // selection gate: only bodies of the universe you're in, and in the
+    // Observable Universe only once you've entered the solar neighborhood.
     function selectable(f) {
-      if (state.viewWidthUnits > 8e5) return f.name === 'sun';
+      if (f.realm !== state.realm) return false;
+      if (f.beacon) return true;              // galaxies answer from any distance
+      if (state.realm === 'observable' && state.viewWidthUnits > 8e5) return f.name === 'sun';
       return true;
     }
 
@@ -557,6 +590,7 @@
     // arrive over the sunlit face, offset for a cinematic 3/4 lighting angle
     function sunSideAngles(f) {
       if (f.name === 'sun') return null;
+      if (f.realm && f.realm !== 'observable') return null;   // realms light themselves
       tmpV2.copy(eph.sun).sub(f.getPosition()).normalize();
       return {
         theta: Math.atan2(tmpV2.x, tmpV2.z) + 0.55,
@@ -597,7 +631,10 @@
 
     function flyTo(f) {
       var r1 = Math.max(f.radius * 3.6, f.radius + f.minAlt);
-      flight = { from: cam.focus, to: f, t0: state.t, dur: 2.1, r0: cam.radius, r1: r1 };
+      // depart from the camera's CURRENT virtual focus (mid-flight included),
+      // never from the stale focus object — no backwards snap on redirects
+      flight = { fromPos: focusPos.clone(), fromName: cam.focus.name,
+                 to: f, t0: state.t, dur: 2.1, r0: cam.radius, r1: r1 };
       var a = sunSideAngles(f);
       if (a) {
         cam.thetaT = nearestAngle(cam.theta, a.theta);
@@ -629,7 +666,7 @@
       var a = sunSideAngles(f);
       if (a) { cam.theta = cam.thetaT = a.theta; cam.phi = cam.phiT = a.phi; }
       state.focusName = f.name; state.focusLabel = f.label;
-      showFocusFact(f.name);
+      if (!opts.quiet) showFocusFact(f.name);   // quiet: don't consume one-shot facts
       flight = null;
     };
 
@@ -649,9 +686,81 @@
     }
     btnExag.addEventListener('click', function () { markInput(); toggleExag(); });
     btnLabels.addEventListener('click', function () { markInput(); toggleLabels(); });
+
+    // destinations bar: one tap flies anywhere in the universe you're in
+    var navEl = el('hud-nav');
+    var navBtns = {};
+    function rebuildNav(realmId) {
+      if (!navEl) return;
+      navEl.innerHTML = '';
+      navBtns = {};
+      (realmNavLists[realmId] || []).forEach(function (n) {
+        var f = focusables[n]; if (!f) return;
+        var b = document.createElement('button');
+        b.textContent = f.label.replace('The ', '');
+        b.addEventListener('click', function () { markInput(); flyTo(f); });
+        navEl.appendChild(b);
+        navBtns[n] = b;
+      });
+    }
+    rebuildNav('observable');
+
+    // ---- multiverse atlas + travel -------------------------------------------
+    var atlasEl = el('atlas-panel'), atlasBtn = el('btn-atlas');
+    var atlasOpen = false;
+    function toggleAtlas(force) {
+      atlasOpen = force !== undefined ? force : !atlasOpen;
+      if (atlasEl) atlasEl.classList.toggle('show', atlasOpen);
+      if (atlasBtn) atlasBtn.classList.toggle('on', atlasOpen);
+    }
+    function buildAtlas() {
+      if (!atlasEl) return;
+      atlasEl.innerHTML = '';
+      Object.keys(realms).forEach(function (id) {
+        var def = realms[id].def;
+        var b = document.createElement('button');
+        b.className = 'uni';
+        b.innerHTML = '<span class="dot" style="background:' + def.accent + '"></span>' +
+          '<span class="un">' + def.name + '</span><span class="ut">' + def.tagline + '</span>';
+        b.addEventListener('click', function () { COSMOS.enterUniverse(id); });
+        atlasEl.appendChild(b);
+      });
+    }
+    if (atlasBtn) atlasBtn.addEventListener('click', function () { markInput(); toggleAtlas(); });
+
+    function applyAccent(color) {
+      document.documentElement.style.setProperty('--acc', color || '#c8d4ec');
+    }
+
+    COSMOS.enterUniverse = function (id) {
+      var target = realms[id];
+      if (!target || id === state.realm) { toggleAtlas(false); return; }
+      markInput();
+      toggleAtlas(false);
+      hideInfo();
+      doFlash('#eef3ff', 800);
+      setTimeout(function () {
+        if (realms[state.realm]) realms[state.realm].group.visible = false;
+        state.realm = id;
+        target.group.visible = true;
+        var f = focusables[realmHome[id]] || cam.focus;
+        flight = null;
+        cam.focus = f;
+        cam.radius = cam.radiusT = Math.max(f.radius * 9, f.radius + f.minAlt);
+        cam.theta = cam.thetaT = 0.6;
+        cam.phi = cam.phiT = 1.1;
+        state.focusName = f.name; state.focusLabel = f.label;
+        applyAccent(target.def.accent);
+        rebuildNav(id);
+        bandIdx = -1;
+        suppressBandUntil = state.t + 6;
+        showToast(target.def.arrive || ('You have crossed into ' + target.def.name + '.'), 8000);
+      }, 320);
+    };
     window.addEventListener('keydown', function (e) {
-      if (e.key === 'e' || e.key === 'E') toggleExag();
-      if (e.key === 'l' || e.key === 'L') toggleLabels();
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === 'e' || e.key === 'E') { markInput(); toggleExag(); }
+      if (e.key === 'l' || e.key === 'L') { markInput(); toggleLabels(); }
     });
 
     window.addEventListener('resize', function () {
@@ -709,7 +818,12 @@
       if (flight) {
         var ft = clamp((state.t - flight.t0) / flight.dur, 0, 1);
         var e = smooth01(ft);
-        focusPos.copy(flight.from.getPosition()).lerp(flight.to.getPosition(), e);
+        focusPos.copy(flight.fromPos).lerp(flight.to.getPosition(), e);
+        // arc over the Sun when the straight chord would dive through it
+        var dS = focusPos.length();
+        if (dS < 800 && flight.to.name !== 'sun' && flight.fromName !== 'sun') {
+          focusPos.y += (800 - dS) * Math.sin(Math.PI * e);
+        }
         cam.radius = Math.exp(lerp(Math.log(flight.r0), Math.log(flight.r1), e));
         cam.radiusT = cam.radius;
         if (ft >= 1) {
@@ -724,10 +838,12 @@
           var par = focusables[f.parent];
           var switchAt = Math.max(40 * f.radius,
             0.7 * tmpV.copy(f.getPosition()).sub(par.getPosition()).length());
-          if (cam.radiusT > switchAt) setFocusSeamless(par);
+          // only while actually zooming OUTWARD — otherwise a fresh zoom-in
+          // retarget onto a child would be reverted on the very same frame
+          if (cam.radiusT > switchAt && cam.radiusT >= cam.radius) setFocusSeamless(par);
         }
         var minR = cam.focus.radius + cam.focus.minAlt;
-        cam.radiusT = clamp(cam.radiusT, minR, LAYOUT.CAM_MAX);
+        cam.radiusT = clamp(cam.radiusT, minR, camMax());
       }
 
       // damped follow
@@ -754,7 +870,9 @@
       // derived state
       state.camDist = cam.radius;
       state.altitude = Math.max(cam.radius - cam.focus.radius, 1e-9);
-      state.viewWidthUnits = 2 * cam.radius * Math.tan(FOV * Math.PI / 360);
+      // altitude, not center-distance: hovering 5 km over Everest should read
+      // "≈ 5 km", not "≈ Earth's radius" (identical at large scales anyway)
+      state.viewWidthUnits = 2 * state.altitude * Math.tan(FOV * Math.PI / 360);
       state.viewKm = displayKm(state.viewWidthUnits);
       state.camOriginDist = camPos.length();
       if (!flight) { state.focusName = cam.focus.name; state.focusLabel = cam.focus.label; }
@@ -764,7 +882,8 @@
 
       // modules
       for (var i = 0; i < updaters.length; i++) {
-        try { updaters[i](dt, state); } catch (err) { /* keep the sky alive */ }
+        try { updaters[i](dt, state); }
+        catch (err) { COSMOS.lastUpdateError = String(err && err.stack || err); }
       }
 
       // HUD at ~10 Hz
@@ -775,18 +894,32 @@
         nameD.textContent = 'altitude ' + fmtKm(displayKm(state.altitude));
         nameW.textContent = cam.focus.warn || '';
         scaleW.textContent = fmtKm(state.viewKm);
-        scaleRef.textContent = refLine(state.viewKm);
+        scaleRef.textContent = state.realm === 'observable'
+          ? refLine(state.viewKm)
+          : (realms[state.realm] ? realms[state.realm].def.tagline : '');
 
-        // caption bands with a settle delay
-        var bi = 0;
-        for (var b = 0; b < BANDS.length; b++) if (state.viewKm >= BANDS[b][0]) bi = b;
-        if (bi !== bandIdx) {
+        // caption bands with a settle delay (Observable Universe narration only)
+        var bi = -1;
+        if (state.realm === 'observable') {
+          for (var b = 0; b < BANDS.length; b++) {
+            if (state.viewKm >= BANDS[b][0] &&
+                (!BANDS[b][2] || BANDS[b][2] === state.focusName)) bi = b;
+          }
+        }
+        if (bi >= 0 && bi !== bandIdx) {
           if (state.t < suppressBandUntil) bandIdx = bi;   // absorb silently after arrivals
           else if (bi !== bandPendIdx) { bandPendIdx = bi; bandPendAt = state.t; }
           else if (state.t - bandPendAt > 0.9) { bandIdx = bi; showToast(BANDS[bi][1], 8000); }
         }
         if (toastTimer && state.t > toastTimer) { hudCaption.classList.remove('show'); toastTimer = 0; }
         if (infoOpen && (state.focusName !== 'earth' || state.altitude > 0.5)) hideInfo();
+
+        // destinations bar: in fictional universes always; at home once inside
+        if (navEl) {
+          navEl.classList.toggle('show',
+            state.realm !== 'observable' || state.viewWidthUnits < 8e5);
+          for (var nk in navBtns) navBtns[nk].classList.toggle('cur', nk === state.focusName);
+        }
       }
 
       renderer.render(scene, camera);
@@ -794,12 +927,55 @@
 
     // ---- go -------------------------------------------------------------------------
     loadTextures().then(function () {
+      // ~7 MB of base64 source strings are decoded into GPU textures now —
+      // release the JS-heap copies (matters on memory-tight phones)
+      window.COSMOS_ASSETS = null;
+      window.COSMOS_ASSETS2 = null;
       for (var i = 0; i < registry.length; i++) {
         try { registry[i].build(ctx); }
         catch (err) {
           window.onerror('module "' + registry[i].name + '" failed: ' + err.message, 'engine.js', 0);
         }
       }
+
+      // ---- multiverse assembly ------------------------------------------------
+      // Fold everything built so far into realm 0: the Observable Universe.
+      var obsGroup = new THREE.Group();
+      obsGroup.name = 'realm-observable';
+      var kids = world.children.slice();
+      for (var w = 0; w < kids.length; w++) obsGroup.add(kids[w]);
+      world.add(obsGroup);
+      realms.observable = { group: obsGroup, def: {
+        id: 'observable', name: 'Observable Universe',
+        tagline: 'everything that is real', accent: '#c8d4ec'
+      } };
+
+      // Build every registered universe in its own isolated, hidden realm.
+      // Nothing leaks between realms: separate groups, focusables, lights.
+      COSMOS._universeDefs.forEach(function (def) {
+        var g = new THREE.Group();
+        g.name = 'realm-' + def.id;
+        g.visible = false;
+        world.add(g);
+        realmNavLists[def.id] = [];
+        try {
+          def.build(ctx, g, function (f) {
+            f.realm = def.id;
+            addFocus(f);
+            realmNavLists[def.id].push(f.name);
+            if (f.home) realmHome[def.id] = f.name;
+          });
+        } catch (err) {
+          window.onerror('universe "' + def.id + '" failed: ' + err.message, 'engine.js', 0);
+        }
+        realms[def.id] = { group: g, def: def };
+        if (def.facts) {
+          Object.keys(def.facts).forEach(function (k) { FOCUS_FACTS[k] = def.facts[k]; });
+        }
+      });
+      buildAtlas();
+      rebuildNav('observable');   // include destinations modules added at build
+
       el('loading').classList.add('gone');
       clock.start();
       frame();

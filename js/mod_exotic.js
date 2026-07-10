@@ -392,7 +392,7 @@
       tex.colorSpace = THREE.SRGBColorSpace;
       var s = new THREE.Sprite(new THREE.SpriteMaterial({
         map: tex, transparent: true, blending: THREE.AdditiveBlending,
-        depthTest: false, depthWrite: false
+        depthTest: true, depthWrite: false     // occluded by planets, like any star
       }));
       s.renderOrder = 45;
       return s;
@@ -439,7 +439,10 @@
         var h = LABEL_PX / state.pixelsPerUnit(dL);
         label.scale.set(h * label.userData.aspect, h, 1);
       }
-      // glint: constant on-screen size from any distance, fades out up close
+      // glint: constant on-screen size from any distance, fades out up close.
+      // Nudged toward the camera so its own horizon sphere/torus can't occlude it.
+      tmpB.copy(center).sub(state.camPos).normalize().multiplyScalar(-objRadius * 1.6);
+      glint.position.copy(tmpB);
       var s = glintPx / ppu;
       glint.scale.set(s, s, 1);
       var o = (1 - clamp01((objPx - 18) / 70)) * 0.9;
@@ -507,7 +510,7 @@
       if (dove && state.t > cooldownUntil) {
         cooldownUntil = state.t + 5;
         ctx.flash('#eaf4ff', 260);
-        COSMOS.setFocusByName('saturn', { radiusMult: 5 });
+        COSMOS.setFocusByName('saturn', { radiusMult: 5, quiet: true });
         ctx.toast('Wormhole transit — an Ellis throat would connect distant regions. (Entirely hypothetical.)', 8000);
       }
     });

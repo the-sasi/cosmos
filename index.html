@@ -7,6 +7,7 @@
 <meta name="theme-color" content="#000006">
 <title>COSMOS — from the universe to Everest</title>
 <style>
+  :root { --acc: #c8d4ec; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #000006; }
   body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #cfd6e4; }
@@ -52,7 +53,7 @@
     background: rgba(14,17,30,0.6); border: 1px solid rgba(140,160,200,0.22); border-radius: 999px;
     padding: 8px 14px; cursor: pointer; backdrop-filter: blur(6px); transition: all 0.2s; }
   #hud-ctl button:hover { color: #fff; border-color: rgba(160,180,220,0.5); }
-  #hud-ctl button.on { color: #0b0e18; background: #c8d4ec; border-color: #c8d4ec; }
+  #hud-ctl button.on { color: #0b0e18; background: var(--acc); border-color: var(--acc); }
   #hud-hints { font-size: 11px; color: #6d7890; letter-spacing: 0.05em; text-align: right; line-height: 1.7; }
   @media (pointer: coarse) { #hud-hints .kb { display: none; } }
   @media (pointer: fine)   { #hud-hints .tc { display: none; } }
@@ -103,6 +104,22 @@
   #hud-info .row .v { font-size: 10.5px; color: #7d89a3; white-space: nowrap; }
   #hud-info .note { font-size: 11.5px; line-height: 1.55; color: #b9c4d9; margin-top: 12px; }
 
+  /* destinations bar — appears once you're inside the solar neighborhood */
+  #hud-nav { position: fixed; z-index: 5; left: 50%; transform: translateX(-50%);
+    bottom: calc(max(18px, env(safe-area-inset-bottom)) + 64px);
+    display: flex; gap: 6px; max-width: 94vw; overflow-x: auto; padding: 4px;
+    opacity: 0; pointer-events: none; transition: opacity 0.45s ease;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  #hud-nav::-webkit-scrollbar { display: none; }
+  #hud-nav.show { opacity: 1; pointer-events: auto; }
+  #hud-nav button { flex: 0 0 auto; font: 500 10.5px system-ui, sans-serif; letter-spacing: 0.05em;
+    color: #9fb0cc; background: rgba(14,17,30,0.55); border: 1px solid rgba(140,160,200,0.16);
+    border-radius: 999px; padding: 5px 11px; cursor: pointer; backdrop-filter: blur(5px);
+    transition: color 0.2s, background 0.2s; }
+  #hud-nav button:hover { color: #fff; border-color: rgba(160,180,220,0.45); }
+  #hud-nav button.cur { color: #0b0e18; background: var(--acc); border-color: var(--acc); }
+
+
   #nogl { position: fixed; inset: 0; z-index: 30; background: #000; display: none;
     align-items: center; justify-content: center; text-align: center; padding: 30px;
     font-size: 15px; line-height: 1.7; color: #aab4c8; }
@@ -127,12 +144,13 @@
     </div>
     <div id="hud-hints">
       <span class="kb">scroll — zoom &nbsp;·&nbsp; drag — orbit &nbsp;·&nbsp; click — travel &nbsp;·&nbsp; E — terrain</span>
-      <span class="tc">pinch — zoom &nbsp;·&nbsp; drag — orbit &nbsp;·&nbsp; tap — travel</span>
+      <span class="tc">pinch — zoom &nbsp;·&nbsp; drag — orbit &nbsp;·&nbsp; tap — travel &nbsp;·&nbsp; ⛰ — terrain</span>
     </div>
   </div>
 
   <div id="hud-credit" class="hud">imagery: NASA · planets: Solar System Scope (CC BY 4.0) · hypothetical objects marked</div>
   <div id="hud-info" class="hud"></div>
+  <div id="hud-nav"></div>
 
   <div id="intro"><h1>COSMOS</h1><p>scroll to fall in</p></div>
   <div id="flash"></div>
@@ -151,6 +169,7 @@
   <script src="js/mod_geo.js"></script>
   <script src="js/mod_exotic.js"></script>
   <script src="js/mod_monuments.js"></script>
+  <script src="js/mod_multiverse.js"></script>
   <script>COSMOS.boot();</script>
 </body>
 </html>

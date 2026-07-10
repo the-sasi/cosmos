@@ -48,6 +48,14 @@
     }
     if (A.earthSpecular) matOpts.specularMap = A.earthSpecular;
 
+    // the close-range detail layer re-tiles this map at uv*13/53/211 — without
+    // RepeatWrapping those samples clamp to a single edge texel and the whole
+    // feature silently degenerates into a brightness shift
+    if (A.earthDay) {
+      A.earthDay.wrapS = A.earthDay.wrapT = THREE.RepeatWrapping;
+      A.earthDay.needsUpdate = true;
+    }
+
     var earthMat = new THREE.MeshPhongMaterial(matOpts);
     var hasNight = !!A.earthNight;
 
@@ -98,7 +106,9 @@
           '  diffuseColor.rgb *= 1.0 + ( cosmosD1 * 0.42 + cosmosD2 * 0.28 + cosmosD3 * 0.24 ) * uDetail;\n' +
           // sharper modulation for the night lights: breaks blurred city blobs
           // into granular sprawl when the camera is low
-          '  cosmosNightDetail = clamp( 1.0 + ( cosmosD1 * 0.7 + cosmosD2 * 1.2 + cosmosD3 * 1.1 ) * uDetail, 0.05, 2.1 );\n' +
+          // gentle: break up blur without extinguishing coastal cities whose
+          // underlying day-map luminance is dark (never below 45%)
+          '  cosmosNightDetail = clamp( 1.0 + ( cosmosD1 * 0.35 + cosmosD2 * 0.5 + cosmosD3 * 0.45 ) * uDetail, 0.45, 1.7 );\n' +
           '}\n' +
           '#endif')
         .replace('#include <emissivemap_fragment>',
