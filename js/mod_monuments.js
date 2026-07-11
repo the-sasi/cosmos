@@ -138,7 +138,7 @@
     /* ---- HOME beacon ------------------------------------------------------
        EDIT THE COORDINATES BELOW to your own house (lat, lon from any map).
        Rendered as a golden light-pillar so home is findable from orbit. */
-    var HOME = { lat: 13.0827, lon: 80.2707, name: 'Home' };
+    var HOME = { lat: 10.706404333929857, lon: 78.44300913339504, name: 'Home' };
     var homeDir = latLonToVec3(HOME.lat, HOME.lon, 1);
     var homeAnchor = new THREE.Group();
     homeAnchor.quaternion.setFromUnitVectors(UP, homeDir);

@@ -262,6 +262,52 @@
     world.add(glint);
     var GLINT_K = 0.012;
 
+    /* ===================== SOLAR PROMINENCE EVENTS ======================== */
+    // Every 15-35 s a flare erupts at a random angle on the limb: a teardrop
+    // plume that grows to ~0.9 sun radii and fades over ~5 s. The timer runs
+    // on state.t; all flare work is gated to camera-within-20000-units.
+
+    var flareCanvas = (function () {
+      var c = document.createElement('canvas');
+      c.width = c.height = 128;
+      var g = c.getContext('2d');
+      g.globalCompositeOperation = 'lighter';
+      var base = g.createRadialGradient(64, 98, 0, 64, 98, 36);
+      base.addColorStop(0.00, 'rgba(255,246,226,0.95)');
+      base.addColorStop(0.35, 'rgba(255,198,122,0.55)');
+      base.addColorStop(1.00, 'rgba(255,148,62,0)');
+      g.fillStyle = base;
+      g.fillRect(0, 0, 128, 128);
+      for (var i = 0; i < 7; i++) {          // arcing plume of fading blobs
+        var u = i / 6;
+        var bx = 64 + Math.sin(u * 2.6) * 13;
+        var by = 98 - u * 78;
+        var br = 25 - u * 15;
+        var grd = g.createRadialGradient(bx, by, 0, bx, by, br);
+        grd.addColorStop(0, 'rgba(255,214,150,' + (0.5 * (1 - u * 0.8)).toFixed(3) + ')');
+        grd.addColorStop(1, 'rgba(255,140,58,0)');
+        g.fillStyle = grd;
+        g.beginPath(); g.arc(bx, by, br, 0, TWO_PI); g.fill();
+      }
+      return c;
+    })();
+    var flareTex = new THREE.CanvasTexture(flareCanvas);
+    flareTex.colorSpace = THREE.SRGBColorSpace;
+    var flare = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: flareTex, blending: THREE.AdditiveBlending,
+      transparent: true, depthWrite: false, opacity: 0
+    }));
+    flare.visible = false;
+    flare.renderOrder = 7;
+    flare.frustumCulled = false;
+    world.add(flare);
+    var FLARE_DUR = 5.0;
+    var FLARE_GATE = 20000;                   // skip all flare work when far
+    var flareNext = 12 + Math.random() * 23;  // t of the first eruption
+    var flareStart = -1;                      // <0 = idle
+    var flareEnv = 0;                         // 0..1 envelope, boosts corona
+    var flareDir = new THREE.Vector3();       // outward limb direction
+
     /* ======================= procedural planet skins ====================== */
 
     function texMercury(w, h) {
@@ -554,6 +600,89 @@
       moonItems.push({ key: k, mesh: mesh });
     });
 
+    /* ========================= ASTEROID BELT ============================== */
+    // between Mars (2800) and Jupiter (5200): thousands of slow drifters
+    var beltN = Math.floor(2200 * Q.particleScale) + 300;
+    var beltPos = new Float32Array(beltN * 3);
+    for (var ab = 0; ab < beltN; ab++) {
+      var aa = Math.random() * Math.PI * 2;
+      var ar = 3350 + Math.random() * 1050;
+      beltPos[ab * 3] = Math.cos(aa) * ar;
+      beltPos[ab * 3 + 1] = (Math.random() - 0.5) * 90;
+      beltPos[ab * 3 + 2] = Math.sin(aa) * ar;
+    }
+    var beltGeo = new THREE.BufferGeometry();
+    beltGeo.setAttribute('position', new THREE.BufferAttribute(beltPos, 3));
+    var belt = new THREE.Points(beltGeo, new THREE.PointsMaterial({
+      color: 0x9a8d7c, size: 1.4, sizeAttenuation: false,
+      transparent: true, opacity: 0.65, depthWrite: false
+    }));
+    belt.frustumCulled = false;
+    world.add(belt);
+
+    /* =============================== COMET ================================ */
+    // One long-period visitor on an eccentric, slightly inclined orbit.
+    // Angular speed follows Kepler's 2nd law (dθ/dt = h/r²), with h chosen
+    // so a full orbit takes ~10 minutes of animation time.
+
+    var COMET_INC = 0.2;                          // inclination (rad)
+    var COMET_A = (600 + 9000) / 2;               // semi-major (peri 600, apo 9000)
+    var COMET_E = (9000 - 600) / (9000 + 600);    // eccentricity
+    var COMET_P = COMET_A * (1 - COMET_E * COMET_E);          // semi-latus rectum
+    var COMET_H = TWO_PI * COMET_A * COMET_A *
+                  Math.sqrt(1 - COMET_E * COMET_E) / 600;     // 2·area / period
+    var COMET_GLINT_K = 0.0045;                   // ~5 px head, like the sun glint
+    var cometAngle = Math.random() * TWO_PI;
+    var cometPos = new THREE.Vector3();
+    var cometCosI = Math.cos(COMET_INC), cometSinI = Math.sin(COMET_INC);
+
+    function cometUpdatePos() {                   // angle -> logical position
+      var r = COMET_P / (1 + COMET_E * Math.cos(cometAngle));
+      var px = Math.cos(cometAngle) * r;
+      var pz = Math.sin(cometAngle) * r;
+      cometPos.set(px, pz * cometSinI, pz * cometCosI).add(ctx.eph.sun);
+    }
+
+    var cometHeadTex = new THREE.CanvasTexture(radialSprite(64, [
+      [0.00, 'rgba(240,255,255,1.0)'],
+      [0.25, 'rgba(180,235,255,0.55)'],
+      [0.60, 'rgba(140,210,255,0.12)'],
+      [1.00, 'rgba(120,200,255,0)']
+    ]));
+    cometHeadTex.colorSpace = THREE.SRGBColorSpace;
+    var cometHead = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: cometHeadTex, blending: THREE.AdditiveBlending,
+      transparent: true, depthWrite: false, opacity: 0.95
+    }));
+    cometHead.renderOrder = 7;
+    cometHead.frustumCulled = false;
+    world.add(cometHead);
+
+    // tail: ring buffer of recent head positions, alpha fading with age
+    // (encoded as color brightness — additive blending makes dark = faint)
+    var TAIL_N = 50;
+    var tailPos = new Float32Array(TAIL_N * 3);
+    var tailCol = new Float32Array(TAIL_N * 3);
+    cometUpdatePos();
+    for (var tc = 0; tc < TAIL_N; tc++) {         // seed at the head: no strays
+      tailPos[tc * 3] = cometPos.x;
+      tailPos[tc * 3 + 1] = cometPos.y;
+      tailPos[tc * 3 + 2] = cometPos.z;
+    }
+    var tailGeo = new THREE.BufferGeometry();
+    tailGeo.setAttribute('position', new THREE.BufferAttribute(tailPos, 3));
+    tailGeo.setAttribute('color', new THREE.BufferAttribute(tailCol, 3));
+    var tail = new THREE.Points(tailGeo, new THREE.PointsMaterial({
+      size: 2.2, sizeAttenuation: false, vertexColors: true,
+      blending: THREE.AdditiveBlending, transparent: true,
+      opacity: 0.8, depthWrite: false
+    }));
+    tail.renderOrder = 6;
+    tail.frustumCulled = false;
+    world.add(tail);
+    var tailHead = 0;                             // ring-buffer write index
+    var tailLast = -1;                            // t of last recorded sample
+
     /* ============================ ORBIT LINES ============================= */
 
     var orbitMat = new THREE.LineBasicMaterial({
@@ -599,6 +728,8 @@
 
     var tmpA = new THREE.Vector3();
     var upV = new THREE.Vector3();
+    var flareTmp = new THREE.Vector3();
+    var tmpQ = new THREE.Quaternion();
     var SUN_SPIN = TWO_PI / (DAY_SECONDS * 25.4);
 
     ctx.onUpdate(function (dt, st) {
@@ -614,7 +745,9 @@
       var p2 = 1 + 0.04 * Math.sin(st.t * 0.33 + 1.7);
       coronaIn.scale.set(COR_IN * p1, COR_IN * p1, 1);
       coronaOut.scale.set(COR_OUT * p2, COR_OUT * p2, 1);
-      coronaIn.material.opacity = 0.8 + 0.08 * Math.sin(st.t * 0.7);
+      coronaIn.material.opacity = 0.8 + 0.08 * Math.sin(st.t * 0.7)
+        + flareEnv * 0.15;               // flare boost (1 frame behind — fine)
+      coronaOut.material.opacity = 0.6 + flareEnv * 0.1;
       coronaIn.position.copy(ctx.eph.sun);
       coronaOut.position.copy(ctx.eph.sun);
 
@@ -623,6 +756,38 @@
       var gh = dSun * GLINT_K;
       glint.scale.set(gh, gh, 1);
       glint.position.copy(ctx.eph.sun);
+
+      // prominences: erupt on the limb every 15-35 s, only worked when close
+      if (dSun < FLARE_GATE) {
+        if (flareStart < 0 && st.t >= flareNext) {
+          flareStart = st.t;
+          var fa = Math.random() * TWO_PI;
+          flareDir.set(Math.cos(fa), 0, Math.sin(fa));
+        }
+        if (flareStart >= 0) {
+          var fu = (st.t - flareStart) / FLARE_DUR;
+          if (fu >= 1) {
+            flareStart = -1;
+            flareNext = st.t + 15 + Math.random() * 20;
+            flareEnv = 0;
+            flare.visible = false;
+          } else {
+            flareEnv = sstep(0, 0.22, fu) * (1 - sstep(0.55, 1, fu));
+            var fh = SUN_R * 0.9 * sstep(0, 0.6, fu);
+            flare.visible = true;
+            flare.material.opacity = flareEnv * 0.9;
+            flare.scale.set(fh * 0.62 + 0.001, fh + 0.001, 1);
+            flare.position.copy(ctx.eph.sun).addScaledVector(flareDir, SUN_R * 1.06);
+            // rotate the sprite so the plume points outward in screen space
+            tmpQ.copy(ctx.camera.quaternion).invert();
+            flareTmp.copy(flareDir).applyQuaternion(tmpQ);
+            flare.material.rotation = Math.atan2(-flareTmp.x, flareTmp.y);
+          }
+        }
+      } else if (flare.visible) {
+        flareEnv = 0;
+        flare.visible = false;
+      }
 
       // planets: follow ephemeris, spin about tilted axis
       for (var i = 0; i < planetItems.length; i++) {
@@ -639,6 +804,38 @@
       // moons of the other planets ride the ephemeris
       for (var mi = 0; mi < moonItems.length; mi++) {
         moonItems[mi].mesh.position.copy(ctx.eph[moonItems[mi].key]);
+      }
+
+      // the belt drifts — slow, patient, alive
+      belt.rotation.y += dt * ts * 0.0025;
+
+      // comet: sweep equal areas — fast at perihelion, slow at aphelion
+      var cr = COMET_P / (1 + COMET_E * Math.cos(cometAngle));
+      cometAngle += (COMET_H / (cr * cr)) * dt * ts;
+      if (cometAngle > TWO_PI) cometAngle -= TWO_PI;
+      else if (cometAngle < 0) cometAngle += TWO_PI;
+      cometUpdatePos();
+      cometHead.position.copy(cometPos);
+      var dComet = tmpA.copy(cometPos).sub(st.camPos).length();
+      var chs = dComet * COMET_GLINT_K;      // screen-constant ~5 px head
+      cometHead.scale.set(chs, chs, 1);
+      // record a tail sample every ~0.2 s; brightness fades with age
+      if (st.t - tailLast > 0.2 && st.camOriginDist < 4e6) {
+        tailLast = st.t;
+        tailPos[tailHead * 3] = cometPos.x;
+        tailPos[tailHead * 3 + 1] = cometPos.y;
+        tailPos[tailHead * 3 + 2] = cometPos.z;
+        tailHead = (tailHead + 1) % TAIL_N;
+        for (var tv = 0; tv < TAIL_N; tv++) {
+          var tAge = (tailHead - 1 - tv + TAIL_N) % TAIL_N;   // 0 = newest
+          var tb = 1 - tAge / TAIL_N;
+          tb *= tb;
+          tailCol[tv * 3] = 0.55 * tb;       // pale cyan, dark = transparent
+          tailCol[tv * 3 + 1] = 0.85 * tb;
+          tailCol[tv * 3 + 2] = tb;
+        }
+        tailGeo.attributes.position.needsUpdate = true;
+        tailGeo.attributes.color.needsUpdate = true;
       }
 
       // labels: screen-constant height. A body's label shows once its orbit is

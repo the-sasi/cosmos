@@ -4,7 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="COSMOS">
+<meta name="application-name" content="COSMOS">
+<meta name="description" content="A living universe you can fall into — galaxies, black holes, planets, Earth, Everest. Discovery is the gameplay.">
 <meta name="theme-color" content="#000006">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <title>COSMOS — from the universe to Everest</title>
 <style>
   :root { --acc: #c8d4ec; }
@@ -170,6 +178,19 @@
   <script src="js/mod_exotic.js"></script>
   <script src="js/mod_monuments.js"></script>
   <script src="js/mod_multiverse.js"></script>
-  <script>COSMOS.boot();</script>
+  <script>
+    COSMOS.boot();
+    // full PWA (manifest + offline worker) when hosted over http(s);
+    // skipped from file:// where browsers block manifest fetches
+    if (location.protocol.indexOf('http') === 0) {
+      var mf = document.createElement('link');
+      mf.rel = 'manifest';
+      mf.href = 'manifest.webmanifest';
+      document.head.appendChild(mf);
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('sw.js').catch(function () {});
+      }
+    }
+  </script>
 </body>
 </html>

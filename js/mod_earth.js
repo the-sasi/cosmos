@@ -213,6 +213,69 @@
     atmoMesh.renderOrder = 3;
     tiltGroup.add(atmoMesh); // no need to spin a radially-symmetric shell
 
+    /* =========================================================================
+       Satellites — 5 tiny additive glow sprites in earth-local orbits.
+       Parented to tiltGroup (NOT spinGroup: they must not rotate with the
+       ground). Per-sat orbit plane is precomputed as two basis vectors from
+       inclination + node; per-frame position = (cos a · e1 + sin a · e2) · r.
+       One is a 'station' whose light blinks red-white like a nav beacon.
+       ====================================================================== */
+    var satTex = (function () {
+      var c = document.createElement('canvas');
+      c.width = 32; c.height = 32;
+      var g = c.getContext('2d');
+      var grad = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+      grad.addColorStop(0, 'rgba(255,255,255,1)');
+      grad.addColorStop(0.35, 'rgba(230,238,255,0.85)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 32, 32);
+      var tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    })();
+
+    var SAT_DEFS = [ // r (Earth radii), inclination/node (rad), phase, period (s)
+      { r: 1.10, inc: 0.12, node: 0.0, phase: 0.0, period: 46, px: 3.0, color: 0xe8f0ff },
+      { r: 1.18, inc: 0.55, node: 1.9, phase: 2.1, period: 58, px: 3.0, color: 0xdfe8ff },
+      { r: 1.28, inc: 0.90, node: 3.7, phase: 4.4, period: 72, px: 3.0, color: 0xf2f4ff },
+      { r: 1.38, inc: 1.35, node: 5.2, phase: 1.3, period: 88, px: 3.0, color: 0xe4ecff },
+      // the station — bigger, blinking nav light
+      { r: 1.06, inc: 0.42, node: 2.8, phase: 5.5, period: 40, px: 4.5, color: 0xffffff, station: true }
+    ];
+
+    var sats = [];
+    for (var si = 0; si < SAT_DEFS.length; si++) {
+      var sd = SAT_DEFS[si];
+      var cn = Math.cos(sd.node), sn = Math.sin(sd.node);
+      var ci = Math.cos(sd.inc), sii = Math.sin(sd.inc);
+      var sMat = new THREE.SpriteMaterial({
+        map: satTex,
+        color: sd.color,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      var sSpr = new THREE.Sprite(sMat);
+      sSpr.name = 'earthSat' + si;
+      sSpr.renderOrder = 4;
+      sSpr.visible = false; // gated on camera proximity in onUpdate
+      tiltGroup.add(sSpr);
+      sats.push({
+        sprite: sSpr,
+        // orthonormal orbit-plane basis (equatorial node line + inclined normal)
+        e1: new THREE.Vector3(cn, 0, -sn),
+        e2: new THREE.Vector3(sn * ci, sii, cn * ci),
+        r: sd.r,
+        angle: sd.phase,
+        rate: Math.PI * 2 / sd.period,
+        px: sd.px,
+        station: !!sd.station,
+        blinkOn: -1
+      });
+    }
+    var satsShown = false;
+
     /* ---- per-frame ------------------------------------------------------- */
     var DAY_SECONDS = 120;                 // one Earth day of animation time
     var spinRate = Math.PI * 2 / DAY_SECONDS;
@@ -221,6 +284,7 @@
     var cloudSpin = 0.9;
     var sunDirV = uSunDir.value;
     var camRel = new THREE.Vector3();      // hoisted — no per-frame allocations
+    var satTmp = new THREE.Vector3();      // hoisted — satellite world offset
 
     ctx.onUpdate(function (dt, state) {
       tiltGroup.position.copy(ctx.eph.earth);
@@ -251,6 +315,41 @@
       var altE = camRel.length() - R;
       var d = (0.24 - altE) / 0.22;
       uDetail.value = d < 0 ? 0 : (d > 1 ? 1 : d);
+
+      // satellites: sub-pixel beyond ~60 units, so skip the math and hide them
+      var satsNear = altE + R < 60;
+      if (satsNear !== satsShown) {
+        satsShown = satsNear;
+        for (var iS = 0; iS < sats.length; iS++) sats[iS].sprite.visible = satsNear;
+      }
+      if (satsNear) {
+        for (var jS = 0; jS < sats.length; jS++) {
+          var sat = sats[jS];
+          sat.angle += sat.rate * dt * state.timeScale;
+          if (sat.angle > TWO_PI) sat.angle -= TWO_PI;
+          var caS = Math.cos(sat.angle) * sat.r;
+          var saS = Math.sin(sat.angle) * sat.r;
+          sat.sprite.position.set(
+            sat.e1.x * caS + sat.e2.x * saS,
+            sat.e1.y * caS + sat.e2.y * saS,
+            sat.e1.z * caS + sat.e2.z * saS
+          );
+          // screen-constant size: earth-local -> world via the (fixed) axial
+          // tilt, then distance against camRel (both earth-relative, logical)
+          satTmp.copy(sat.sprite.position).applyQuaternion(tiltGroup.quaternion).sub(camRel);
+          var scS = sat.px / state.pixelsPerUnit(Math.max(satTmp.length(), 1e-6));
+          sat.sprite.scale.set(scS, scS, 1);
+          if (sat.station) {
+            // nav-light square wave on raw t (shimmer/blink may ignore timeScale)
+            var onS = (state.t % 1.2) < 0.6 ? 1 : 0;
+            if (onS !== sat.blinkOn) {
+              sat.blinkOn = onS;
+              sat.sprite.material.color.setHex(onS ? 0xff6655 : 0xfff4f0);
+              sat.sprite.material.opacity = onS ? 1.0 : 0.7;
+            }
+          }
+        }
+      }
     });
   });
 })();

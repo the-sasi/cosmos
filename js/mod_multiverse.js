@@ -66,6 +66,55 @@
         return col;
       });
     }
+    // richer world painter: oceans with depth, continents with relief and
+    // shorelines, ragged polar caps — no more colored balls
+    function worldTexPro(dark, lite, seed, opts) {
+      opts = opts || {};
+      var sea = opts.sea || null;
+      var cap = opts.cap !== false;
+      return makeTex(TS, TS / 2, function (u, v) {
+        var n = fbm(u * 6, v * 4, seed, 4);
+        var d2 = fbm(u * 19, v * 13, seed + 7, 3);
+        var col;
+        if (sea) {
+          if (n < 0.52) {
+            col = lerpC([sea[0] * 0.35, sea[1] * 0.4, sea[2] * 0.5], sea,
+                        Math.max(0, Math.min(1, n * 1.7)));
+          } else {
+            col = lerpC(dark, lite, Math.min(1, (n - 0.52) * 3.2));
+            col = lerpC(col, [col[0] * 0.72, col[1] * 0.74, col[2] * 0.72], d2 * 0.75);
+          }
+        } else {
+          col = lerpC(dark, lite, Math.max(0, Math.min(1, (n - 0.3) * 2.2)));
+          col = lerpC(col, [col[0] * 0.7, col[1] * 0.72, col[2] * 0.76], d2 * 0.55);
+        }
+        if (cap) {
+          var pole = Math.abs(v - 0.5) * 2;
+          var edge = 0.78 + 0.1 * fbm(u * 9, 0.5, seed + 13, 2);
+          if (pole > edge) col = lerpC(col, [236, 243, 250], Math.min(1, (pole - edge) * 8));
+        }
+        return col;
+      });
+    }
+    // soft procedural cloud layer with real alpha
+    function cloudTex(seed) {
+      var c = document.createElement('canvas');
+      c.width = 128; c.height = 64;
+      var g = c.getContext('2d');
+      var img = g.createImageData(128, 64);
+      var d = img.data, p = 0;
+      for (var y = 0; y < 64; y++) {
+        for (var x = 0; x < 128; x++) {
+          var n = fbm(x / 128 * 7, y / 64 * 4, seed, 4);
+          var a = Math.min(1, Math.max(0, (n - 0.55) * 3.4)) * 235;
+          d[p++] = 255; d[p++] = 255; d[p++] = 255; d[p++] = a;
+        }
+      }
+      g.putImageData(img, 0, 0);
+      var tex = new THREE.CanvasTexture(c);
+      tex.wrapS = THREE.RepeatWrapping;
+      return tex;
+    }
     function rampTex(stops, fx, fy, seed, extra) {
       return makeTex(TS, TS / 2, function (u, v) {
         var n = fbm(u * fx, v * fy, seed, 4);
@@ -107,46 +156,25 @@
       return s;
     }
 
-    /* --------------------- category clusters of the sky ------------------- */
-    var CAT_R = 2.6e6;
-    var CATS = {
-      anime:    { label: 'ANIME GALAXIES',      dir: [0.55, 0.18, -0.45] },
-      cartoons: { label: 'CARTOON GALAXIES',    dir: [0.62, -0.25, 0.38] },
-      movies:   { label: 'SCI-FI CINEMA',       dir: [-0.15, 0.30, 0.72] },
-      games:    { label: 'GAME GALAXIES',       dir: [-0.60, 0.10, 0.50] },
-      fantasy:  { label: 'FANTASY GALAXIES',    dir: [-0.70, -0.20, -0.40] },
-      myth:     { label: 'MYTHOLOGY',           dir: [-0.10, -0.45, -0.75] },
-      original: { label: 'ORIGINAL UNIVERSES',  dir: [-0.55, 0.30, -0.60] }
-    };
-    Object.keys(CATS).forEach(function (k, i) {
-      var c = CATS[k];
-      var d = new THREE.Vector3().fromArray(c.dir).normalize();
-      c.center = d.multiplyScalar(CAT_R);
-      c.count = 0;
-      c.sprite = ctx.makeTextSprite('—  ' + c.label + '  —', { fontPx: 48, color: '#93a6c9' });
-      c.sprite.position.copy(c.center).y += 5.2e5;
-      ctx.world.add(c.sprite);
-      c.aspect = c.sprite.userData.aspect;
-      ctx.registerFocus({ name: 'cat-' + k, label: c.label.toLowerCase(), radius: 5.5e5,
-        minAlt: 1.8e5, parent: 'sun', beacon: true,
-        getPosition: (function (cc) { return function () { return cc; }; })(c.center) });
-      ctx.addNav('cat-' + k);
-      ctx.addFact('cat-' + k, 'A cluster of ' + c.label.toLowerCase() +
-        ' — every glowing island here is a place you can fall into.');
-    });
-    // spread galaxies of one category around its cluster centre
-    function catPos(cat) {
-      var c = CATS[cat];
-      var i = c.count++;
-      var d = c.center.clone().normalize();
-      var perp1 = new THREE.Vector3(-d.z, 0, d.x).normalize();
-      var perp2 = new THREE.Vector3().crossVectors(d, perp1);
-      var ang = i * 2.39996;                        // golden angle spiral
-      var rad = 1.6e5 + 1.5e5 * Math.sqrt(i + 0.4);
-      return c.center.clone()
-        .addScaledVector(perp1, Math.cos(ang) * rad)
-        .addScaledVector(perp2, Math.sin(ang) * rad * 0.65)
-        .addScaledVector(d, (hash(i, 7, 3) - 0.5) * 4e5);
+    /* ------------- natural scatter — categories are metadata only ---------- */
+    // Galaxies are strewn across the sky at wildly different distances and
+    // sizes. Nothing announces what any of them holds: a galaxy is only a
+    // catalog code until you arrive. Discovery is the gameplay, and it is
+    // remembered across sessions. (def.cat survives as engine metadata only.)
+    var GXI = 0;
+    function scatterPos(i) {
+      var u = hash(i, 3, 71) * 2 - 1;
+      var t = hash(i, 5, 73) * Math.PI * 2;
+      var s = Math.sqrt(1 - u * u);
+      var r = 1.3e6 * Math.pow(13, hash(i, 7, 79));   // 1.3e6 .. ~1.7e7: near & far
+      return new THREE.Vector3(s * Math.cos(t) * r, u * r * 0.55, s * Math.sin(t) * r);
+    }
+    function catalogCode(i) { return 'GX-' + (1009 + ((i * 613) % 8987)); }
+    var discovered = {};
+    try { discovered = JSON.parse(localStorage.getItem('cosmos-discovered') || '{}'); }
+    catch (e) { discovered = {}; }
+    function saveDiscovered() {
+      try { localStorage.setItem('cosmos-discovered', JSON.stringify(discovered)); } catch (e) {}
     }
 
     /* -------------------------- galaxy factory ---------------------------- */
@@ -154,13 +182,17 @@
     var NEAR_SHOW = 6e5;         // full content appears within this distance
 
     function buildGalaxy(def) {
-      var C = catPos(def.cat);
+      var idx = GXI++;
+      var C = scatterPos(idx);
+      var code = catalogCode(idx);
+      var known = !!discovered[def.id];
       var g = new THREE.Group();          // near content (hidden until close)
       g.position.copy(C);
       g.visible = false;
       ctx.world.add(g);
 
-      var R = def.cloudR || 1.6e4;
+      // size and brilliance vary wildly — some giants, some barely-there
+      var R = def.cloudR || (7e3 + 2.8e4 * hash(idx, 9, 83));
       var n = Math.floor((def.detailed ? 3000 : 2000) * ctx.quality.particleScale) + 250;
       var pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
       for (var i = 0; i < n; i++) {
@@ -184,11 +216,13 @@
       cloud.rotation.set((hash(C.x, 1, 9) - 0.5) * 1.2, 0, (hash(C.z, 2, 9) - 0.5) * 1.2);
       g.add(cloud);
 
+      var nebs = [];
       (def.nebulae || []).forEach(function (nb, i) {
         var sp = glow([[0, nb[0]], [0.55, nb[1]], [1, 'rgba(0,0,0,0)']], R * (1.1 + i * 0.4), nb[2]);
         sp.position.set((hash(i, 1, 5) - 0.5) * R, (hash(i, 2, 5) - 0.5) * R * 0.4,
                         (hash(i, 3, 5) - 0.5) * R);
         g.add(sp);
+        nebs.push({ s: sp, o: nb[2] });
       });
 
       var starR = def.starR || 42;
@@ -203,23 +237,37 @@
       g.add(light);
 
       // far representation: one core glow + one beacon — 2 sprites, that's all
-      var core = glow([[0, def.glow0], [0.4, def.glow1], [1, 'rgba(0,0,0,0)']], R * 1.7, 0.7);
+      var bright = 0.35 + 0.45 * hash(idx, 11, 89);
+      var core = glow([[0, def.glow0], [0.4, def.glow1], [1, 'rgba(0,0,0,0)']], R * 1.7, bright);
       core.position.copy(C);
       ctx.world.add(core);
-      var beacon = ctx.makeTextSprite('✦ ' + def.name, { fontPx: 44, color: def.accent });
-      beacon.position.copy(C).y += R * 1.5;
-      ctx.world.add(beacon);
+      // anonymous until visited: the code sprite is all the sky admits to
+      var beaconCode = ctx.makeTextSprite('✦ ' + code, { fontPx: 38, color: '#7d89a3' });
+      beaconCode.position.copy(C).y += R * 1.5;
+      ctx.world.add(beaconCode);
+      var beaconName = ctx.makeTextSprite('✦ ' + def.name, { fontPx: 44, color: def.accent });
+      beaconName.position.copy(C).y += R * 1.5;
+      beaconName.visible = false;
+      ctx.world.add(beaconName);
 
-      ctx.registerFocus({ name: def.id, label: def.name, radius: R, minAlt: R * 0.22,
-        parent: 'sun', beacon: true, getPosition: function () { return C; } });
+      var gf = { name: def.id, label: known ? def.name : code, radius: R, minAlt: R * 0.22,
+        parent: 'sun', beacon: true, getPosition: function () { return C; } };
+      ctx.registerFocus(gf);
       ctx.registerFocus({ name: def.id + '-star', label: def.starLabel || 'The Star',
         radius: starR, minAlt: starR * 0.5, parent: def.id,
         getPosition: (function (p) { return function () { return p; }; })(C.clone()) });
-      ctx.addFact(def.id, def.arrive);
+      // the arrival fact stays generic until the galaxy is actually discovered
+      ctx.addFact(def.id, known ? def.arrive
+        : 'Uncharted. The catalog lists it as ' + code + ' — nothing more is known. Go closer.');
       if (def.facts) Object.keys(def.facts).forEach(function (k) { ctx.addFact(k, def.facts[k]); });
 
-      var gx = { C: C, group: g, cloud: cloud, beacon: beacon, R: R,
-                 aspect: beacon.userData.aspect, spinners: [] };
+      var gx = { id: def.id, name: def.name, arrive: def.arrive, C: C, group: g,
+                 cloud: cloud, R: R, focus: gf, known: known, idx: idx,
+                 accent: def.accent, built: false,
+                 codeSprite: beaconCode, nameSprite: beaconName,
+                 aspectCode: beaconCode.userData.aspect,
+                 aspectName: beaconName.userData.aspect,
+                 spinners: [], customs: [], nebs: nebs };
 
       (def.worlds || []).forEach(function (w, wi) {
         var off = w.offset || [
@@ -278,6 +326,8 @@
         ctx.registerFocus({ name: w.name, label: w.label, radius: w.r,
           parent: def.id + '-star', getPosition: function () { return abs; } });
         gx.spinners.push([mesh, w.spin || 0.06]);
+        // hand-crafted world details (floating mountains, sky islands, life)
+        if (w.custom) { try { w.custom(mesh, lp, gx, g); } catch (e) {} }
       });
 
       galaxies.push(gx);
@@ -309,7 +359,8 @@
         { name: 'db-vegeta', label: 'Planet Vegeta', r: 5, offset: [-640, 40, 380],
           tex: rampTex([[0.3, [70, 28, 22]], [0.5, [130, 55, 35]], [0.68, [185, 95, 55]], [0.85, [220, 150, 100]]], 6, 3.5, 11) },
         { name: 'db-earth', label: 'Earth (theirs)', r: 4, offset: [820, -30, -540],
-          tex: rampTex([[0.3, [16, 40, 90]], [0.5, [22, 70, 140]], [0.6, [60, 130, 80]], [0.8, [140, 180, 120]]], 8, 5, 17) },
+          tex: rampTex([[0.3, [16, 40, 90]], [0.5, [22, 70, 140]], [0.6, [60, 130, 80]], [0.8, [140, 180, 120]]], 8, 5, 17),
+          surfLabels: [['Kame House', 5, -140], ['West City', 30, -110], ['Korin Tower', 15, -95]] },
         { name: 'db-kaio', label: "King Kai's World", r: 0.6, offset: [150, 70, -90],
           tex: rampTex([[0.3, [40, 110, 40]], [0.6, [90, 170, 70]], [0.9, [150, 210, 110]]], 14, 9, 23) }
       ]
@@ -344,18 +395,53 @@
       worlds: [
         { name: 'op-blue', label: 'The Blue Planet', r: 6, offset: [380, 30, -260], spin: 0.045,
           shin: 40, spec: 0x336688,
-          tex: makeTex(TS, TS / 2, function (u, v) {
-            var n = fbm(u * 8, v * 5, 51, 4);
-            var col = ramp([[0.3, [10, 45, 95]], [0.55, [16, 80, 150]], [0.75, [30, 120, 190]]], n);
-            if (n > 0.78) col = [225, 205, 150];
-            var band = Math.abs(v - 0.5);
-            if (band < 0.035) col = lerpC(col, [235, 245, 250], 0.55 * (1 - band / 0.035));
-            var mer = Math.min(Math.abs(u - 0.22), Math.abs(u - 0.72));
-            if (mer < 0.012) col = lerpC(col, [150, 45, 40], 0.8);
-            return col;
-          }),
+          tex: (function () {
+            // canonical layout: the Red Line circles pole-to-pole (two
+            // meridians), the Grand Line crosses it at the equator, four
+            // Blues in the quadrants, islands stamped along the Grand Line
+            var ISLES = [[12, -58], [4, -18], [-6, 8], [1, 38], [-3, 62], [22, 88],
+                         [-18, 105], [34, 132], [-38, 168]];
+            return makeTex(TS, TS / 2, function (u, v) {
+              var n = fbm(u * 8, v * 5, 51, 4);
+              var col = ramp([[0.3, [10, 45, 95]], [0.55, [16, 80, 150]], [0.75, [30, 120, 190]]], n);
+              if (n > 0.8) col = [225, 205, 150];
+              var band = Math.abs(v - 0.5);
+              if (band < 0.035) col = lerpC(col, [235, 245, 250], 0.55 * (1 - band / 0.035));
+              var mer = Math.min(Math.abs(u - 0.22), Math.abs(u - 0.72));
+              if (mer < 0.012) col = lerpC(col, [150, 45, 40], 0.8);
+              for (var ii = 0; ii < ISLES.length; ii++) {
+                var iu = (ISLES[ii][1] + 180) / 360, iv = (90 - ISLES[ii][0]) / 180;
+                var du = Math.abs(u - iu); if (du > 0.5) du = 1 - du;
+                if (du * du * 4 + (v - iv) * (v - iv) < 0.00028) col = [222, 200, 140];
+              }
+              return col;
+            });
+          })(),
           surfLabels: [['Dawn Island', 12, -58], ['Alabasta', 4, -18], ['Water 7', -6, 8],
-                       ['Sabaody', 1, 38], ['Wano', 22, 88], ['Elbaf', 34, 132]] }
+                       ['Sabaody', 1, 38], ['Dressrosa', -3, 62], ['Wano', 22, 88],
+                       ['Whole Cake', -18, 105], ['Elbaf', 34, 132]],
+          custom: function (mesh, lp, gx) {
+            // Skypiea — an island in the sky, riding the White-White Sea
+            var sky = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.7, 0.09, 18),
+              new THREE.MeshPhongMaterial({ color: 0xf2ecdc }));
+            sky.position.copy(latLon(6, 55, 6 * 1.32));
+            sky.lookAt(0, 0, 0);
+            sky.rotateX(Math.PI / 2);
+            mesh.add(sky);
+            var puff = glow([[0, 'rgba(255,255,255,0.9)'], [0.6, 'rgba(255,255,255,0.25)'],
+                             [1, 'rgba(0,0,0,0)']], 2.2, 0.6);
+            puff.position.copy(latLon(6, 55, 6 * 1.26));
+            mesh.add(puff);
+            mkLabel(mesh, 'Skypiea — 10,000 m up', '#eef4ff', latLon(6, 55, 6 * 1.5), 0.3);
+            // Fish-Man Island, deep beneath the Red Line
+            mkLabel(mesh, 'Fish-Man Island — 10,000 m down', '#7db8e8', latLon(-6, 46, 6.15), 0.16);
+            // and at the end of the Grand Line, barely marked...
+            var lt = glow([[0, 'rgba(255,225,140,1)'], [0.5, 'rgba(255,190,60,0.4)'],
+                           [1, 'rgba(0,0,0,0)']], 0.45, 0.85);
+            lt.position.copy(latLon(-38, 168, 6.03));
+            mesh.add(lt);
+            mkLabel(mesh, 'Laugh Tale', '#ffe9a8', latLon(-38, 168, 6.35), 0.1);
+          } }
       ]
     });
     buildGalaxy({
@@ -471,9 +557,52 @@
       cat: 'movies', id: 'gx-avatar', name: 'Alpha Centauri Tribute', accent: '#7dfce8',
       starColors: cool, glow0: 'rgba(130,250,230,0.9)', glow1: 'rgba(50,160,200,0.25)',
       arrive: 'A fan tribute — a moon that glows at night and remembers everything.',
+      facts: {
+        'av-pandora': 'Pandora — mountains that ignore gravity, forests that glow in the dark, and a network older than every nation that ever visited it.'
+      },
       worlds: [
-        { name: 'av-pandora', label: 'Pandora', r: 4, spin: 0.06,
-          tex: duoTex([15, 70, 90], [90, 220, 190], 7, 137) },
+        { name: 'av-pandora', label: 'Pandora', r: 4, spin: 0.05,
+          tex: worldTexPro([20, 90, 60], [110, 230, 170], 137, { sea: [14, 70, 110] }),
+          surfLabels: [['Omatikaya Forest', -4, -20], ['The Eastern Sea', 5, 95]],
+          custom: function (mesh, lp, gx) {
+            // the Hallelujah Mountains — rock islands hanging in the sky
+            for (var i = 0; i < 7; i++) {
+              var rock = new THREE.Mesh(
+                new THREE.IcosahedronGeometry(0.16 + hash(i, 1, 7) * 0.22, 0),
+                new THREE.MeshPhongMaterial({ color: 0x5a6f66, flatShading: true }));
+              rock.position.copy(latLon(8 + (hash(i, 2, 7) - 0.5) * 14,
+                -40 + (hash(i, 3, 7) - 0.5) * 18, 4 * (1.12 + hash(i, 4, 7) * 0.16)));
+              mesh.add(rock);
+            }
+            mkLabel(mesh, 'Hallelujah Mountains', '#9df2dd', latLon(8, -40, 5.6), 0.26);
+            // the Tree of Souls, pale and awake
+            var soul = glow([[0, 'rgba(215,255,246,1)'], [0.4, 'rgba(120,240,220,0.5)'],
+                             [1, 'rgba(0,0,0,0)']], 0.7, 0.9);
+            soul.position.copy(latLon(-12, -55, 4.05));
+            mesh.add(soul);
+            mkLabel(mesh, 'Tree of Souls', '#c9fff2', latLon(-12, -55, 4.5), 0.18);
+            // ikran circling the floating peaks
+            var BN = 12, bAng = [];
+            var bp3 = new Float32Array(BN * 3);
+            var bGeo = new THREE.BufferGeometry();
+            bGeo.setAttribute('position', new THREE.BufferAttribute(bp3, 3));
+            var flock = new THREE.Points(bGeo, new THREE.PointsMaterial({
+              color: 0xbafff0, size: 2, sizeAttenuation: false,
+              transparent: true, opacity: 0.9, depthWrite: false }));
+            flock.frustumCulled = false;
+            mesh.add(flock);
+            for (var b3 = 0; b3 < BN; b3++) bAng.push(hash(b3, 5, 7) * 6.28);
+            gx.customs.push(function (w) {
+              for (var k = 0; k < BN; k++) {
+                bAng[k] += w * (0.35 + hash(k, 6, 7) * 0.5);
+                var bd = latLon(8 + Math.sin(bAng[k]) * 9,
+                                -40 + Math.cos(bAng[k] * 0.8) * 13,
+                                4 * (1.1 + 0.05 * Math.sin(bAng[k] * 2 + k)));
+                bp3[k * 3] = bd.x; bp3[k * 3 + 1] = bd.y; bp3[k * 3 + 2] = bd.z;
+              }
+              bGeo.attributes.position.needsUpdate = true;
+            });
+          } },
         { name: 'av-polyphemus', label: 'Polyphemus', r: 9, tex: duoTex([40, 70, 140], [120, 160, 220], 4, 139) }
       ]
     });
@@ -546,7 +675,8 @@
       worlds: [
         { name: 'me-arda', label: 'Arda', r: 4.4, spin: 0.05,
           tex: duoTex([25, 65, 55], [140, 170, 110], 6, 193),
-          surfLabels: [['The Shire', 30, -20], ['Mordor', 12, 35], ['Gondor', 5, 12]] }
+          surfLabels: [['The Shire', 30, -20], ['Mordor', 12, 35], ['Gondor', 5, 12],
+                       ['Rivendell', 38, -4], ['Rohan', 14, 4], ['Erebor', 48, 16]] }
       ]
     });
     buildGalaxy({
@@ -699,44 +829,441 @@
       ]
     });
 
+    /* ------------- scientific destinations: witness, don't read ------------ */
+    function addScienceSites() {
+      buildGalaxy({
+        cat: 'science', id: 'sx-nursery', name: 'A Stellar Nursery', accent: '#ffc9d8',
+        cloudR: 1.5e4, starColors: [[1, 0.8, 0.85], [0.9, 0.85, 1], [1, 0.95, 0.8]],
+        starR: 18, starColor: 0xfff0e0, starLabel: 'A Newborn Star',
+        glow0: 'rgba(255,190,215,0.9)', glow1: 'rgba(200,90,150,0.3)',
+        nebulae: [['rgba(255,140,190,0.2)', 'rgba(150,50,120,0.06)', 0.55],
+                  ['rgba(140,180,255,0.14)', 'rgba(60,80,200,0.05)', 0.5]],
+        arrive: 'A stellar nursery — you are watching stars being born. Every bright knot in this cloud is a sun younger than your species.',
+        worlds: []
+      });
+      var nursery = galaxies[galaxies.length - 1];
+      nursery.babies = [];
+      for (var nb = 0; nb < 12; nb++) {
+        var bs = glow([[0, 'rgba(255,250,240,1)'], [0.4, 'rgba(255,200,170,0.4)'],
+                       [1, 'rgba(0,0,0,0)']], 260 + hash(nb, 1, 11) * 500, 0.85);
+        bs.position.set((hash(nb, 2, 11) - 0.5) * nursery.R * 1.2,
+                        (hash(nb, 3, 11) - 0.5) * nursery.R * 0.3,
+                        (hash(nb, 4, 11) - 0.5) * nursery.R * 1.2);
+        nursery.group.add(bs);
+        nursery.babies.push([bs, 1.5 + hash(nb, 5, 11) * 3, bs.material.opacity]);
+      }
+      nursery.customs.push(function (w, t) {
+        for (var i = 0; i < nursery.babies.length; i++) {
+          var b = nursery.babies[i];
+          b[0].material.opacity = b[2] * (0.72 + 0.28 * Math.sin(t * b[1] + i * 2.1));
+        }
+      });
+
+      buildGalaxy({
+        cat: 'science', id: 'sx-remnant', name: 'A Supernova Remnant', accent: '#9fd8ff',
+        cloudR: 1.3e4, starColors: [[0.75, 0.9, 1], [0.9, 0.95, 1], [1, 1, 1]],
+        starR: 6, starColor: 0xeaf6ff, starLabel: 'The Neutron Star',
+        glow0: 'rgba(200,235,255,0.9)', glow1: 'rgba(90,160,255,0.3)',
+        nebulae: [['rgba(120,200,255,0.16)', 'rgba(50,90,200,0.05)', 0.5]],
+        arrive: 'A supernova remnant — the corpse of a star that ended ten thousand years ago. Its shell is still expanding. You are inside the explosion.',
+        worlds: []
+      });
+      var rem = galaxies[galaxies.length - 1];
+      var SN = Math.floor(700 * ctx.quality.particleScale) + 120;
+      var sd = new Float32Array(SN * 3), sr = new Float32Array(SN), sp2 = new Float32Array(SN * 3);
+      for (var si = 0; si < SN; si++) {
+        var u2 = Math.random() * 2 - 1, t2 = Math.random() * Math.PI * 2;
+        var q = Math.sqrt(1 - u2 * u2);
+        sd[si * 3] = q * Math.cos(t2); sd[si * 3 + 1] = u2; sd[si * 3 + 2] = q * Math.sin(t2);
+        sr[si] = rem.R * (0.15 + Math.random() * 0.9);
+      }
+      var sg = new THREE.BufferGeometry();
+      sg.setAttribute('position', new THREE.BufferAttribute(sp2, 3));
+      var shell = new THREE.Points(sg, new THREE.PointsMaterial({
+        color: 0xbfe0ff, size: 1.8, sizeAttenuation: false,
+        transparent: true, opacity: 0.85, depthWrite: false,
+        blending: THREE.AdditiveBlending
+      }));
+      shell.frustumCulled = false;
+      rem.group.add(shell);
+      rem.customs.push(function (w) {
+        for (var i = 0; i < SN; i++) {
+          sr[i] += w * rem.R * 0.02;
+          if (sr[i] > rem.R * 1.1) sr[i] = rem.R * 0.15;
+          sp2[i * 3] = sd[i * 3] * sr[i];
+          sp2[i * 3 + 1] = sd[i * 3 + 1] * sr[i] * 0.8;
+          sp2[i * 3 + 2] = sd[i * 3 + 2] * sr[i];
+        }
+        sg.attributes.position.needsUpdate = true;
+      });
+    }
+
+    addScienceSites();
+
+    /* ----------- procedural star systems: a galaxy is a PLACE -------------- */
+    // Generated lazily on first approach, so 38 galaxies cost nothing until
+    // someone actually goes exploring. Each system: star, themed + variety
+    // planets, moons, belts, the odd pulsar, and rare hidden ruins.
+    var GREEK = ['Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta'];
+    var ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI'];
+    var FACT_POOL = [
+      'Tidally locked — one face in permanent noon, the other in permanent memory.',
+      'Its year is shorter than its day. Time here is a matter of opinion.',
+      'Auroras crown both poles, even at noon.',
+      'The atmosphere rains diamonds at depth — probably. Nobody has gone to check.',
+      'A failed star: slightly larger, and this system would have had two suns.',
+      'Volcanically restless — its surface is younger than its clouds.',
+      'An ocean under the ice, and in it, maybe, chemistry doing something ambitious.',
+      'Storms here have names, and the names have outlived their namers.',
+      'Its magnetic field sings in radio. Some say it is just physics. Some say.',
+      'Nothing remarkable — which, out here, is the most remarkable thing of all.'
+    ];
+    function hex2rgb(hex) {
+      var n = parseInt(hex.slice(1), 16);
+      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    }
+    function themedPair(accent, h1, h2) {
+      var c = hex2rgb(accent);
+      var dark = [c[0] * (0.12 + 0.18 * h1), c[1] * (0.12 + 0.18 * h1), c[2] * (0.14 + 0.2 * h1)];
+      var lite = lerpC(c, [255, 255, 255], 0.25 + 0.35 * h2);
+      return [dark, lite];
+    }
+    function buildSystems(gx) {
+      var idx = gx.idx, g = gx.group, R = gx.R;
+      var short = gx.name.replace(' Galaxy', '').replace('A Galaxy Far, Far Away', 'Outer Rim');
+      var nSys = 2 + Math.floor(hash(idx, 21, 101) * 4);        // 2–5 extra systems
+      for (var s = 0; s < nSys; s++) {
+        var hs = function (k) { return hash(idx * 7 + s * 131, k, 107); };
+        var ang = hs(1) * Math.PI * 2;
+        var srad = R * (0.16 + 0.5 * hs(2));
+        var sysPos = new THREE.Vector3(Math.cos(ang) * srad, (hs(3) - 0.5) * R * 0.12,
+                                       Math.sin(ang) * srad);
+        var sysName = short + ' ' + GREEK[s];
+        var sysId = gx.id + '-s' + s;
+
+        // the system's star (lit by the galaxy core light — no extra lights)
+        var starR = 16 + 34 * hs(4);
+        var scol = [0xfff0d0, 0xcfe0ff, 0xffc9a0, 0xf8f8ff][Math.floor(hs(5) * 4)];
+        var star = new THREE.Mesh(new THREE.SphereGeometry(starR, 28, 18),
+                                  new THREE.MeshBasicMaterial({ color: scol }));
+        star.position.copy(sysPos);
+        g.add(star);
+        var halo = glow([[0, 'rgba(255,245,225,0.9)'], [0.5, 'rgba(255,200,130,0.25)'],
+                         [1, 'rgba(0,0,0,0)']], starR * 6, 0.8);
+        halo.position.copy(sysPos);
+        g.add(halo);
+        mkLabel(g, sysName, gx.accent, sysPos.clone().add(new THREE.Vector3(0, starR * 2.2, 0)), starR * 0.5);
+        var sysAbs = gx.C.clone().add(sysPos);
+        ctx.registerFocus({ name: sysId, label: sysName, radius: starR,
+          minAlt: starR * 0.5, parent: gx.id,
+          getPosition: (function (p) { return function () { return p; }; })(sysAbs) });
+        ctx.addFact(sysId, sysName + ' — one of the star systems of ' + gx.name +
+          '. ' + (hs(6) < 0.5 ? 'Its light will not reach your home for a very long time.'
+                              : 'No probe from your world has ever been here.'));
+
+        // planets: themed base + variety pool (ocean / lava / ice / rare ruins)
+        var nP = 2 + Math.floor(hs(7) * 4);
+        for (var p = 0; p < nP; p++) {
+          var hp = function (k) { return hash(idx * 13 + s * 173 + p * 311, k, 109); };
+          var pr = 1.4 + 4.6 * hp(1);
+          var pd = starR * 2.5 + 130 + 190 * p + 90 * hp(2);
+          var pa = hp(3) * Math.PI * 2;
+          var pPos = sysPos.clone().add(new THREE.Vector3(Math.cos(pa) * pd,
+            (hp(4) - 0.5) * 40, Math.sin(pa) * pd));
+          var roll = hp(5);
+          var mesh, fact;
+          var seedP = idx * 100 + s * 10 + p;
+          var atmCol = null, hasClouds = false;
+          if (roll < 0.05) {                                        // hidden ruins
+            mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(pr, 1),
+              new THREE.MeshPhongMaterial({ color: 0x8a7448, flatShading: true, shininess: 60 }));
+            fact = 'Ancient ruins cover this world pole to pole. Whoever built them measured time in eras, not years.';
+          } else if (roll < 0.2) {                                   // ocean world
+            mesh = new THREE.Mesh(new THREE.SphereGeometry(pr, 28, 18),
+              new THREE.MeshPhongMaterial({
+                map: worldTexPro([40, 110, 70], [200, 190, 150], seedP, { sea: [16, 80, 150] }),
+                shininess: 70, specular: new THREE.Color(0x5588aa) }));
+            fact = 'An unbroken ocean. Its tides answer ' + (nP > 2 ? 'two' : 'one') + ' moons and no one else.';
+            atmCol = 'rgba(125,185,255,0.55)';
+            hasClouds = true;
+          } else if (roll < 0.32) {                                  // lava world
+            mesh = new THREE.Mesh(new THREE.SphereGeometry(pr, 28, 18),
+              new THREE.MeshPhongMaterial({
+                map: worldTexPro([30, 8, 5], [255, 130, 40], seedP, { cap: false }),
+                emissive: new THREE.Color(0x551a00), shininess: 10 }));
+            fact = 'Molten from crust to core — a planet still deciding what it wants to be.';
+            atmCol = 'rgba(255,150,80,0.45)';
+          } else if (roll < 0.44) {                                  // ice world
+            mesh = new THREE.Mesh(new THREE.SphereGeometry(pr, 28, 18),
+              new THREE.MeshPhongMaterial({
+                map: worldTexPro([150, 175, 200], [245, 250, 255], seedP),
+                shininess: 55, specular: new THREE.Color(0x8899bb) }));
+            fact = 'Frozen so long that its glaciers have geology of their own.';
+            atmCol = 'rgba(200,228,255,0.4)';
+          } else {                                                   // themed world
+            var pair = themedPair(gx.accent, hp(6), hp(7));
+            var seaC = hp(13) < 0.55
+              ? lerpC(hex2rgb(gx.accent), [18, 55, 125], 0.65) : null;
+            mesh = new THREE.Mesh(new THREE.SphereGeometry(pr, 28, 18),
+              new THREE.MeshPhongMaterial({
+                map: worldTexPro(pair[0], pair[1], seedP, { sea: seaC }),
+                shininess: seaC ? 45 : 12,
+                specular: new THREE.Color(seaC ? 0x446688 : 0x222222) }));
+            fact = FACT_POOL[Math.floor(hp(9) * FACT_POOL.length)];
+            var ac = hex2rgb(gx.accent);
+            atmCol = 'rgba(' + (ac[0] | 0) + ',' + (ac[1] | 0) + ',' + (ac[2] | 0) + ',0.45)';
+            hasClouds = hp(14) < 0.55;
+          }
+          mesh.position.copy(pPos);
+          g.add(mesh);
+
+          // every world wears its air: a soft rim of atmosphere
+          if (atmCol) {
+            var atm = glow([[0, 'rgba(0,0,0,0)'], [0.58, 'rgba(0,0,0,0)'],
+                            [0.78, atmCol], [1, 'rgba(0,0,0,0)']], pr * 2.9, 0.55);
+            atm.position.copy(pPos);
+            g.add(atm);
+          }
+          // independent, drifting cloud decks
+          if (hasClouds) {
+            var cl = new THREE.Mesh(new THREE.SphereGeometry(pr * 1.035, 22, 14),
+              new THREE.MeshLambertMaterial({ map: cloudTex(seedP + 5),
+                transparent: true, depthWrite: false, opacity: 0.85 }));
+            cl.position.copy(pPos);
+            g.add(cl);
+            gx.spinners.push([cl, 0.09 + hp(15) * 0.12]);
+          }
+          // a few worlds keep rings
+          if (hp(16) < 0.14) {
+            var rgeo = new THREE.RingGeometry(pr * 1.55, pr * 2.4, 48);
+            var rmesh = new THREE.Mesh(rgeo, new THREE.MeshBasicMaterial({
+              color: (hp(17) < 0.5 ? 0xcbbfa8 : 0xa8bfd0), transparent: true,
+              opacity: 0.3, side: THREE.DoubleSide, depthWrite: false }));
+            rmesh.rotation.x = 1.1 + (hp(18) - 0.5) * 0.8;
+            rmesh.position.copy(pPos);
+            g.add(rmesh);
+          }
+          var pName = sysName + ' ' + ROMAN[p];
+          var pId = sysId + '-p' + p;
+          mkLabel(g, pName, '#aab8d0', pPos.clone().add(new THREE.Vector3(0, pr * 1.9, 0)), pr * 0.42);
+          var pAbs = gx.C.clone().add(pPos);
+          ctx.registerFocus({ name: pId, label: pName, radius: pr, parent: sysId,
+            getPosition: (function (q) { return function () { return q; }; })(pAbs) });
+          ctx.addFact(pId, fact);
+          gx.spinners.push([mesh, 0.04 + hp(10) * 0.1]);
+
+          // moons for the lucky ones
+          if (hp(11) < 0.35) {
+            var mr = pr * (0.18 + 0.15 * hp(12));
+            var moon = new THREE.Mesh(new THREE.SphereGeometry(mr, 16, 10),
+              new THREE.MeshLambertMaterial({ color: 0x9a948c }));
+            moon.position.copy(pPos).add(new THREE.Vector3(pr * 3, pr * 0.4, pr * 1.5));
+            g.add(moon);
+          }
+        }
+
+        // some systems keep an asteroid belt
+        if (hs(8) < 0.3) {
+          var bn = Math.floor(500 * ctx.quality.particleScale) + 80;
+          var bpos = new Float32Array(bn * 3);
+          var br = starR * 2.5 + 130 + 190 * nP;
+          for (var b2 = 0; b2 < bn; b2++) {
+            var ba = Math.random() * Math.PI * 2;
+            var brr = br * (0.92 + Math.random() * 0.18);
+            bpos[b2 * 3] = sysPos.x + Math.cos(ba) * brr;
+            bpos[b2 * 3 + 1] = sysPos.y + (Math.random() - 0.5) * 26;
+            bpos[b2 * 3 + 2] = sysPos.z + Math.sin(ba) * brr;
+          }
+          var bgeo = new THREE.BufferGeometry();
+          bgeo.setAttribute('position', new THREE.BufferAttribute(bpos, 3));
+          var bp2 = new THREE.Points(bgeo, new THREE.PointsMaterial({
+            color: 0x8d8272, size: 1.3, sizeAttenuation: false,
+            transparent: true, opacity: 0.6, depthWrite: false }));
+          bp2.frustumCulled = false;
+          g.add(bp2);
+        }
+
+        // and a few hide a pulsar
+        if (hs(9) < 0.12) {
+          var pu = new THREE.Mesh(new THREE.IcosahedronGeometry(1.2, 1),
+            new THREE.MeshBasicMaterial({ color: 0xeaf4ff }));
+          pu.position.copy(sysPos).add(new THREE.Vector3(starR * 5, 20, -starR * 3));
+          g.add(pu);
+          var pg = glow([[0, 'rgba(230,245,255,1)'], [0.4, 'rgba(150,200,255,0.4)'],
+                         [1, 'rgba(0,0,0,0)']], 14, 0.9);
+          pg.position.copy(pu.position);
+          g.add(pg);
+          mkLabel(g, 'Pulsar', '#cfe6ff', pu.position.clone().add(new THREE.Vector3(0, 5, 0)), 1.6);
+          gx.spinners.push([pu, 4.0]);
+        }
+      }
+    }
+
+    /* ------------- black hole infall — matter spiraling in ----------------- */
+    // (lives here rather than mod_exotic: purely additive aliveness layer)
+    var BH = ctx.eph.blackhole;
+    var HOLE_R = ctx.layout.BLACKHOLE.holeRadius;
+    var inN = Math.floor(420 * ctx.quality.particleScale) + 80;
+    var inAng = new Float32Array(inN), inRad = new Float32Array(inN), inY = new Float32Array(inN);
+    for (var bi = 0; bi < inN; bi++) {
+      inAng[bi] = Math.random() * Math.PI * 2;
+      inRad[bi] = HOLE_R * 1.3 + Math.random() * HOLE_R * 3.4;
+      inY[bi] = (Math.random() - 0.5) * 1.6;
+    }
+    var inPos = new Float32Array(inN * 3);
+    var inGeo = new THREE.BufferGeometry();
+    inGeo.setAttribute('position', new THREE.BufferAttribute(inPos, 3));
+    var infall = new THREE.Points(inGeo, new THREE.PointsMaterial({
+      color: 0xffd9b0, size: 1.8, sizeAttenuation: false,
+      transparent: true, opacity: 0.85, depthWrite: false,
+      blending: THREE.AdditiveBlending
+    }));
+    infall.frustumCulled = false;
+    infall.renderOrder = 6;
+    ctx.world.add(infall);
+    var TILT = 18 * Math.PI / 180, tc = Math.cos(TILT), tsn = Math.sin(TILT);
+
+    /* ------------- supernovae — the deep sky occasionally answers ---------- */
+    var nova = glow([[0, 'rgba(255,255,255,1)'], [0.3, 'rgba(190,210,255,0.6)'],
+                     [1, 'rgba(0,0,0,0)']], 1, 0);
+    nova.visible = false;
+    ctx.world.add(nova);
+    var novaLife = -1, novaWait = 14 + Math.random() * 18;
+
+    /* ------------- ambient dust: space is never empty ---------------------- */
+    var DUSTN = Math.floor(200 * ctx.quality.particleScale) + 60;
+    var dustPos = new Float32Array(DUSTN * 3);
+    var dustGeo = new THREE.BufferGeometry();
+    dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+    var dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({
+      color: 0xaab8cc, size: 1.2, sizeAttenuation: false,
+      transparent: true, opacity: 0.3, depthWrite: false }));
+    dust.frustumCulled = false;
+    ctx.world.add(dust);
+    var dustR = -1;
+
     /* --------------------------- per-frame -------------------------------- */
     var tmp = new THREE.Vector3();
     ctx.onUpdate(function (dt, state) {
-      // category cluster titles: visible from the deep sky, screen-constant
-      for (var ck in CATS) {
-        var cat = CATS[ck];
-        var cd = tmp.copy(cat.center).sub(state.camPos).length();
-        var cshow = state.labelsVisible && state.viewWidthUnits > 1.2e5 && cd > 8e5;
-        cat.sprite.visible = cshow;
-        if (cshow) {
-          var chh = 17 / state.pixelsPerUnit(cd);
-          cat.sprite.scale.set(chh * cat.aspect, chh, 1);
+      // dust drifts past the camera at every scale — parallax makes motion felt
+      var dr = Math.max(state.camDist * 0.55, 0.02);
+      var cp = state.camPos;
+      if (dustR < 0 || Math.abs(dr - dustR) > dustR * 0.5) {
+        dustR = dr;
+        for (var di = 0; di < DUSTN; di++) {
+          dustPos[di * 3] = cp.x + (Math.random() - 0.5) * dr * 2;
+          dustPos[di * 3 + 1] = cp.y + (Math.random() - 0.5) * dr * 2;
+          dustPos[di * 3 + 2] = cp.z + (Math.random() - 0.5) * dr * 2;
         }
+        dustGeo.attributes.position.needsUpdate = true;
+      } else {
+        var moved = false;
+        for (var dj = 0; dj < DUSTN; dj++) {
+          if (Math.abs(dustPos[dj * 3] - cp.x) > dr ||
+              Math.abs(dustPos[dj * 3 + 1] - cp.y) > dr ||
+              Math.abs(dustPos[dj * 3 + 2] - cp.z) > dr) {
+            dustPos[dj * 3] = cp.x + (Math.random() - 0.5) * dr * 2;
+            dustPos[dj * 3 + 1] = cp.y + (Math.random() - 0.5) * dr * 2;
+            dustPos[dj * 3 + 2] = cp.z + (Math.random() - 0.5) * dr * 2;
+            moved = true;
+          }
+        }
+        if (moved) dustGeo.attributes.position.needsUpdate = true;
       }
       for (var i = 0; i < galaxies.length; i++) {
         var gx = galaxies[i];
         var d = tmp.copy(gx.C).sub(state.camPos).length();
 
-        // near content exists only when someone is close enough to see it
-        var near = d < NEAR_SHOW;
+        // near content exists only when someone is close enough to see it;
+        // a galaxy's full star systems are generated on first approach
+        var near = d < Math.max(6e5, gx.R * 30);
         if (gx.group.visible !== near) gx.group.visible = near;
+        if (near && !gx.built) {
+          gx.built = true;
+          try { buildSystems(gx); } catch (e) { /* a galaxy without extras still lives */ }
+        }
 
-        // beacon: screen-constant; only at interstellar zoom, hidden inside the cloud
+        // discovery: names are earned by arriving, and remembered forever
+        if (!gx.known && d < gx.R * 2.2) {
+          gx.known = true;
+          discovered[gx.id] = 1;
+          saveDiscovered();
+          gx.focus.label = gx.name;
+          ctx.addFact(gx.id, gx.arrive);
+          ctx.toast('DISCOVERED — ' + gx.arrive, 10000);
+        }
+
+        // beacon: screen-constant, appears once the blob is worth wondering
+        // about; the code sprite for strangers, the name for the discovered
+        var px = gx.R * state.pixelsPerUnit(d);
         var show = state.labelsVisible && state.viewWidthUnits > 8e3 &&
-                   d > gx.R * 1.2 && d < 3.2e6;
-        gx.beacon.visible = show;
+                   d > gx.R * 1.2 && px > 2.2;
+        var codeShow = show && !gx.known, nameShow = show && gx.known;
+        if (gx.codeSprite.visible !== codeShow) gx.codeSprite.visible = codeShow;
+        if (gx.nameSprite.visible !== nameShow) gx.nameSprite.visible = nameShow;
         if (show) {
           var h = 14 / state.pixelsPerUnit(d);
-          gx.beacon.scale.set(h * gx.aspect, h, 1);
+          var sp = gx.known ? gx.nameSprite : gx.codeSprite;
+          sp.scale.set(h * (gx.known ? gx.aspectName : gx.aspectCode), h, 1);
         }
 
-        if (d < 2e5) {
+        // a visible galaxy is never frozen
+        if (near) {
           var w = dt * state.timeScale;
-          for (var s = 0; s < gx.spinners.length; s++) {
-            gx.spinners[s][0].rotation.y += gx.spinners[s][1] * w;
-          }
           gx.cloud.rotation.y += w * 0.004;
+          if (d < 2e5) {
+            for (var s = 0; s < gx.spinners.length; s++) {
+              gx.spinners[s][0].rotation.y += gx.spinners[s][1] * w;
+            }
+            for (var cu = 0; cu < gx.customs.length; cu++) gx.customs[cu](w, state.t);
+            for (var nbi = 0; nbi < gx.nebs.length; nbi++) {
+              var nb3 = gx.nebs[nbi];
+              nb3.s.material.rotation += w * 0.01;
+              nb3.s.material.opacity = nb3.o * (0.82 + 0.18 * Math.sin(state.t * 0.25 + nbi * 1.7));
+            }
+          }
         }
+      }
+
+      // black hole: matter spirals in whenever anyone is close enough to care
+      if (tmp.copy(BH).sub(state.camPos).length() < 7000) {
+        infall.visible = true;
+        var iw = dt * state.timeScale;
+        for (var p = 0; p < inN; p++) {
+          inAng[p] += iw * 26 / Math.pow(inRad[p], 1.2);
+          inRad[p] -= iw * (0.4 + 26 / inRad[p]);
+          if (inRad[p] < HOLE_R * 1.05) {
+            inRad[p] = HOLE_R * (2.5 + Math.random() * 2.2);
+            inAng[p] = Math.random() * Math.PI * 2;
+          }
+          var lx = Math.cos(inAng[p]) * inRad[p];
+          var lz = Math.sin(inAng[p]) * inRad[p];
+          var ly = inY[p];
+          inPos[p * 3] = BH.x + lx;
+          inPos[p * 3 + 1] = BH.y + ly * tc - lz * tsn;
+          inPos[p * 3 + 2] = BH.z + ly * tsn + lz * tc;
+        }
+        inGeo.attributes.position.needsUpdate = true;
+      } else if (infall.visible) infall.visible = false;
+
+      // occasional supernova: somewhere out there, a star ends
+      novaWait -= dt;
+      if (novaWait <= 0 && novaLife < 0) {
+        var g2 = galaxies[(Math.random() * galaxies.length) | 0];
+        nova.position.copy(g2.C);
+        nova.position.x += (Math.random() - 0.5) * g2.R * 1.4;
+        nova.position.z += (Math.random() - 0.5) * g2.R * 1.4;
+        var ns = g2.R * 0.8;
+        nova.scale.set(ns, ns, 1);
+        nova.visible = true;
+        novaLife = 0;
+        novaWait = 16 + Math.random() * 24;
+      }
+      if (novaLife >= 0) {
+        novaLife += dt;
+        var k = novaLife / 4;
+        nova.material.opacity = k < 0.12 ? k / 0.12 : Math.max(0, 1 - (k - 0.12) / 0.88);
+        if (k >= 1) { novaLife = -1; nova.visible = false; }
       }
     });
   });

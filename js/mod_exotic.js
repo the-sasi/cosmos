@@ -182,6 +182,28 @@
     diskGroup.add(disk);
     bhGroup.add(diskGroup);
 
+    // --- (d) polar jets: thin relativistic beams along the disk axis -------
+    // Children of diskGroup, so they inherit qTilt + precession for free.
+    var JET_H = 130;
+    var jetGeo = new THREE.ConeGeometry(5, JET_H, high ? 24 : 16, 1, true);
+    jetGeo.rotateX(Math.PI);                 // apex to the origin...
+    jetGeo.translate(0, JET_H * 0.5, 0);     // ...so scale.y stretches outward
+    var jetMatA = new THREE.MeshBasicMaterial({
+      color: 0x9fc9ff, transparent: true, opacity: 0.3,
+      depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide
+    });
+    var jetMatB = jetMatA.clone();
+    var jetGroup = new THREE.Group();        // rotX(90°): local +Y = disk normal (+Z)
+    jetGroup.rotation.x = Math.PI / 2;
+    var jetUp = new THREE.Mesh(jetGeo, jetMatA);
+    var jetDown = new THREE.Mesh(jetGeo, jetMatB);
+    jetDown.rotation.z = Math.PI;
+    jetUp.renderOrder = 6;
+    jetDown.renderOrder = 6;
+    jetGroup.add(jetUp);
+    jetGroup.add(jetDown);
+    diskGroup.add(jetGroup);
+
     // ==================================================================
     // WORMHOLE
     // ==================================================================
@@ -402,6 +424,14 @@
     var whGlint = makeGlint('rgba(185,255,238,0.95)', 'rgba(150,132,255,0.30)');
     whAnchor.add(whGlint);
 
+    // event sprites: black-hole feeding flash + wormhole discharge spark
+    var feedFlash = makeGlint('rgba(255,214,150,0.95)', 'rgba(255,124,40,0.35)');
+    feedFlash.visible = false;
+    diskGroup.add(feedFlash);                // disk-local: XY is the disk plane
+    var spark = makeGlint('rgba(235,246,255,0.95)', 'rgba(186,214,255,0.32)');
+    spark.visible = false;
+    whGroup.add(spark);
+
     // ==================================================================
     // PER-FRAME
     // ==================================================================
@@ -420,6 +450,8 @@
     var precAngle = 0, diskT = 0, whT = 0, whPhase = 0;
     var cooldownUntil = -1;
     var LABEL_PX = 14;
+    var feedTimer = 0, feedNext = 10 + Math.random() * 12, feedT = -1;   // -1 = idle
+    var sparkTimer = 0, sparkNext = 3 + Math.random() * 4, sparkT = -1;
 
     function clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
 
@@ -499,6 +531,43 @@
       updateMarkers(bh, DISK_OUT, bhLabel, DISK_OUT * 1.35, bhGlint, 6, state);
       updateMarkers(wh, WR, whLabel, WR * 1.75, whGlint, 5, state);
 
+      // jet pulse + feeding flashes — only animated when the hole is close
+      // enough to matter (same gating idea as the marker fades above)
+      var dBh = tmpA.copy(bh).sub(state.camPos).length();
+      if (dBh < 7000) {
+        jetUp.scale.y = 1.05 + 0.20 * Math.sin(state.t * 0.6);
+        jetDown.scale.y = 1.05 + 0.20 * Math.sin(state.t * 0.6 + 2.4);
+        jetMatA.opacity = 0.30 * (0.86 + 0.14 * Math.sin(state.t * 6.3) * Math.sin(state.t * 2.1));
+        jetMatB.opacity = 0.30 * (0.86 + 0.14 * Math.sin(state.t * 5.1 + 1.7) * Math.sin(state.t * 2.9));
+        if (feedT < 0) {
+          feedTimer += dt * ts;
+          if (feedTimer >= feedNext) {         // something wanders too close
+            feedTimer = 0;
+            feedNext = 10 + Math.random() * 12;
+            feedT = 0;
+            var fa = Math.random() * Math.PI * 2;
+            feedFlash.position.set(Math.cos(fa) * DISK_IN * 1.03, Math.sin(fa) * DISK_IN * 1.03, 0);
+            feedFlash.scale.set(HOLE * 0.5, HOLE * 0.5, 1);
+            feedFlash.material.opacity = 0;
+            feedFlash.visible = true;
+          }
+        } else {
+          feedT += dt * ts;
+          var fp = feedT / 0.9;
+          if (fp >= 1) {
+            feedT = -1;
+            feedFlash.visible = false;
+          } else {
+            var fs = HOLE * (0.5 + 1.1 * fp);
+            feedFlash.scale.set(fs, fs, 1);
+            feedFlash.material.opacity = Math.min(fp * 5.0, 1.0) * (1.0 - fp);
+          }
+        }
+      } else if (feedT >= 0) {
+        feedT = -1;
+        feedFlash.visible = false;
+      }
+
       // wormhole transit. The engine clamps the camera to radius+minAlt (54)
       // around the wormhole focus, so the literal radius/2 sphere is only
       // reachable in fly-bys; also trigger when the user zooms to the floor
@@ -512,6 +581,47 @@
         ctx.flash('#eaf4ff', 260);
         COSMOS.setFocusByName('saturn', { radiusMult: 5, quiet: true });
         ctx.toast('Wormhole transit — an Ellis throat would connect distant regions. (Entirely hypothetical.)', 8000);
+      }
+
+      // wormhole instability — scale pulse, throat flicker, discharge sparks.
+      // Gated by distance; dw was just computed for the transit check.
+      if (dw < 5000) {
+        var wp = 1 + 0.05 * Math.sin(state.t * 3.1) + 0.02 * Math.sin(state.t * 7.7);
+        whGroup.scale.set(wp, wp, wp);
+        // throat alpha falls off with r/uRad, so jittering uRad reads as a
+        // subtle opacity flicker (ShaderMaterial ignores .opacity directly)
+        throatMat.uniforms.uRad.value =
+          THROAT_R * (1 + 0.035 * Math.sin(state.t * 11.3) * Math.sin(state.t * 4.7));
+        if (sparkT < 0) {
+          sparkTimer += dt * ts;
+          if (sparkTimer >= sparkNext) {
+            sparkTimer = 0;
+            sparkNext = 3 + Math.random() * 4;
+            sparkT = 0;
+            var sa = Math.random() * Math.PI * 2;
+            tmpB.copy(state.camPos).sub(wh).normalize().applyQuaternion(qWhInv);
+            spark.position.set(Math.cos(sa) * WR, Math.sin(sa) * WR, 0)
+                 .addScaledVector(tmpB, WR * 0.24);   // nudge clear of the tube
+            spark.scale.set(WR * 0.16, WR * 0.16, 1);
+            spark.material.opacity = 0;
+            spark.visible = true;
+          }
+        } else {
+          sparkT += dt * ts;
+          var sp = sparkT / 0.3;
+          if (sp >= 1) {
+            sparkT = -1;
+            spark.visible = false;
+          } else {
+            var ss = WR * (0.16 + 0.22 * sp);
+            spark.scale.set(ss, ss, 1);
+            spark.material.opacity = Math.min(sp * 4.0, 1.0) * (1.0 - sp);
+          }
+        }
+      } else {
+        whGroup.scale.set(1, 1, 1);
+        throatMat.uniforms.uRad.value = THROAT_R;
+        if (sparkT >= 0) { sparkT = -1; spark.visible = false; }
       }
     });
   });
